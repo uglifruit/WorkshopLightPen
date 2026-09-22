@@ -20,8 +20,19 @@ project(${CARD_NAME} C CXX ASM)
 set(CMAKE_CXX_STANDARD 17)
 pico_sdk_init()
 
+# Every .cpp must be listed here: a missing one only shows up as a link error.
 add_executable(${CARD_NAME}
-  main.cpp)
+  main.cpp
+  fastmath.cpp
+  tape.cpp
+  modes/mirror.cpp
+  modes/triad.cpp
+  modes/barcode.cpp
+  modes/tapescrub.cpp
+  modes/synesthesia.cpp
+  modes/hueorgan.cpp
+  modes/jog.cpp
+  modes/prism.cpp)
 
 target_compile_options(${CARD_NAME} PRIVATE
   -Wdouble-promotion -Wfloat-conversion -Wall -Wextra)

@@ -9,6 +9,7 @@ FLASHME/*.uf2
 
 # Editor / OS noise
 .vscode/
+.claude/
 *.swp
 .DS_Store
 Thumbs.db

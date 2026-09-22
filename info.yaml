@@ -1,9 +1,9 @@
 draft: true
 Name: LIGHTPEN
-short-description: A program card for the Workshop System Computer
+short-description: An RGB light-sensor wand as a six-mode controller and sound source
 Language: C++ (ComputerCard)
 Creator: Andy Jenkinson (uglifruit)
-Version: "0.1.0"
+Version: "0.3.0"
 Status: In development
 License: CC-BY-4.0
 repository: https://github.com/uglifruit/WorkshopLightPen
@@ -17,14 +17,51 @@ contact:
 
 uf2:
   - path: UF2/lightpen.uf2
-    name: LIGHTPEN 0.1.0
+    name: LIGHTPEN 0.3.0
 
 tags:
-  - in-development
+  - controller
+  - sensor
+  - synthesis
+  - looper
+  - quantizer
 
 summary: |
-  LIGHTPEN is a program card for the Music Thing Modular Workshop System
-  Computer.
+  LIGHTPEN drives an RGB sensor wand: three light-dependent resistors under
+  red, green and blue gels in a marker-pen body, powered from CV Out 1 and
+  read on CV In 1, CV In 2 and Audio In 2. Point it at the room or scan
+  printed colour, and the colour becomes CV, gates and audio.<br><br>
 
-  This card is early in development. Details to follow as the design
-  firms up.
+  X sets sensitivity and Y smoothing in every mode. Switch Up steps through
+  eight modes; Down is each mode's action.<br><br>
+
+  The LEDs are two columns of three: the left (0, 2, 4) counts the mode as a
+  three-bit number, and the right is a live meter of red (LED 1), green (3)
+  and blue (5). The meter shows the reading the modes act on — after
+  calibration, sensitivity and smoothing — so it is also how you set the card
+  up: a colour pinned at full brightness or staying dark as the wand moves
+  means the modes see that too.<br><br>
+
+  1 RGB CV Mirror: colour as three CVs, plus threshold gates.
+  2 Triad Drone: red, green and blue set the levels of a chord's three notes.
+  3 Barcode Reader: swipe across a black-and-white code while holding Down,
+  and its bars loop as triggers — every element on one pulse out, the wide
+  ones on the other, with bar width and the black/white gate as CV.
+  4 Tape Scrubber: hold Down to record Audio In 1 for as long as you hold it,
+  then scrub through the take by moving the wand across a colour map, with a
+  colour-controlled filter.
+  5 Synesthesia Voice: a 1V/oct voice whose filter, wavefolder and decay
+  follow the colour.
+  6 Colour Organ: hue picks a note in a scale, as calibrated pitch CV,
+  triggers and an organ tone.
+  7 Jog Wheel: the same take runs as a loop and the wand sets its speed,
+  from a nudge to a full shuttle into reverse, against a flywheel whose
+  weight the colour controls.
+  8 Prism Voice: a sustaining voice with FM, sample-rate crush and filter
+  on the three colours.<br><br>
+
+  Hold Down at power-on to calibrate: tap Down on white paper, then on black
+  card. The calibration is saved and survives power-off.<br><br>
+
+  Still in development: builds and passes its desktop DSP checks, not yet
+  played on hardware.
