@@ -1400,12 +1400,219 @@ def check_tape_modes():
     check("prism crush holds 1..64 samples", crush == [1, 64], str(crush))
 
 
+# --- the real colour maps ---------------------------------------------------------
+#
+# Runs tools/colourmaps/*.png through the same model the cross-talk checks use:
+# each pixel is what the screen emits, the wand sees it through its gels, and
+# the calibrated pipeline reads it back. That is the end-to-end question — does
+# a map the card will actually be pointed at come out as the colours it is?
+
+import os
+import struct
+import zlib
+
+MAPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "colourmaps")
+
+
+def read_png(path):
+    """Minimal PNG decode: 8-bit RGB or RGBA, non-interlaced. Returns
+    (width, height, rows of (r, g, b))."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return None
+    pos, idat, ihdr = 8, [], None
+    while pos < len(data):
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if kind == b"IHDR":
+            ihdr = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"IEND":
+            break
+        pos += 12 + length
+    if not ihdr:
+        return None
+    w, h, depth, colour, _, _, interlace = ihdr
+    if depth != 8 or interlace != 0 or colour not in (2, 6):
+        return None
+    stride = 3 if colour == 2 else 4
+    raw = zlib.decompress(b"".join(idat))
+    rows, prev, pos = [], bytearray(w * stride), 0
+    for _ in range(h):
+        ftype = raw[pos]
+        line = bytearray(raw[pos + 1:pos + 1 + w * stride])
+        pos += 1 + w * stride
+        for i in range(len(line)):
+            a = line[i - stride] if i >= stride else 0
+            b = prev[i]
+            c = prev[i - stride] if i >= stride else 0
+            if ftype == 1:
+                line[i] = (line[i] + a) & 0xFF
+            elif ftype == 2:
+                line[i] = (line[i] + b) & 0xFF
+            elif ftype == 3:
+                line[i] = (line[i] + ((a + b) >> 1)) & 0xFF
+            elif ftype == 4:
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                line[i] = (line[i] + pr) & 0xFF
+        prev = line
+        rows.append([tuple(line[x * stride:x * stride + 3]) for x in range(w)])
+    return w, h, rows
+
+
+def srgb_to_light(v):
+    """A screen emits light proportional to the linearised value, not the
+    0-255 code. The sensor sees light, so linearise before modelling it."""
+    x = v / 255.0
+    return x ** 2.2
+
+
+def pearson(xs, ys):
+    n = len(xs)
+    mx, my = sum(xs) / n, sum(ys) / n
+    num = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    dx = math.sqrt(sum((x - mx) ** 2 for x in xs))
+    dy = math.sqrt(sum((y - my) ** 2 for y in ys))
+    return num / (dx * dy) if dx > 0 and dy > 0 else 0.0
+
+
+def check_real_maps():
+    if not os.path.isdir(MAPS_DIR):
+        check("colour maps present to test against", False, "tools/colourmaps missing")
+        return
+
+    wands = {}
+    for gels in ("optimistic", "leaky"):
+        w = make_wand(gels)
+        p = Pipeline(w.calibration())
+        if p.sep_bars == 0:
+            check(f"the {gels} test wand calibrated before reading maps", False)
+            return
+        wands[gels] = (w, p)
+
+    def reader(gels):
+        w, p = wands[gels]
+        def read_colour(rgb):
+            """What the card reports for a screen showing this pixel."""
+            return [v / 65535 for v in p.read(w.capture(tuple(srgb_to_light(c) for c in rgb)))]
+        return read_colour
+
+    # 1. Does a map's colour survive the whole chain? Sample a grid of pixels
+    # from every map and correlate what went in against what came out.
+    #
+    # Cross-talk has to be measured against the PICTURE, not against zero: on a
+    # black-and-white map the three channels are identical by nature, so a
+    # cross-correlation of 1.0 is the image, not the sensor. What matters is
+    # whether the card ADDS correlation that was not already there — and doing
+    # it with two sets of gels separates the maths from the optics.
+    per_gel = {}
+    checked = 0
+    for gels in ("optimistic", "leaky"):
+        read_colour = reader(gels)
+        worst_same, worst_added, worst_map = 1.0, 0.0, ""
+        checked = 0
+        for name in sorted(os.listdir(MAPS_DIR)):
+            img = read_png(os.path.join(MAPS_DIR, name))
+            if img is None:
+                continue
+            w, h, rows = img
+            ins, outs = [[], [], []], [[], [], []]
+            for yi in range(6):
+                for xi in range(12):
+                    px = rows[(yi * 2 + 1) * h // 13][(xi * 2 + 1) * w // 25]
+                    got = read_colour(px)
+                    for ch in range(3):
+                        ins[ch].append(srgb_to_light(px[ch]))
+                        outs[ch].append(got[ch])
+            if all(max(v) - min(v) < 0.05 for v in ins):
+                continue                  # nothing to correlate against
+            checked += 1
+            same = min(pearson(ins[ch], outs[ch]) for ch in range(3))
+            added = max(abs(pearson(ins[a], outs[b])) - abs(pearson(ins[a], ins[b]))
+                        for a in range(3) for b in range(3) if a != b)
+            worst_same = min(worst_same, same)
+            if added > worst_added:
+                worst_added, worst_map = added, name
+        per_gel[gels] = (worst_same, worst_added, worst_map)
+
+    check("every map decoded and sampled", checked >= 8, f"{checked} maps")
+
+    good_same, good_added, _ = per_gel["optimistic"]
+    check("with clean gels, the maps come back as themselves",
+          good_same > 0.95 and good_added < 0.10,
+          f"own {good_same:.2f}, added cross {good_added:+.2f}")
+
+    leak_same, leak_added, leak_map = per_gel["leaky"]
+    check("with leaky gels, every channel still tracks its own colour",
+          leak_same > 0.85, f"worst own {leak_same:.2f}")
+    # The residue is the gels, not the arithmetic: same maps, same maths, and
+    # it collapses when the gels improve.
+    check("leaky gels leave some bleed, and it is the gels that decide how much",
+          leak_added < 0.30 and leak_added > good_added,
+          f"added cross {leak_added:+.2f} on {leak_map}, vs {good_added:+.2f} with clean gels")
+
+    # 2. The hue field is the colour organ's scale: scanning it sideways should
+    # walk the hue circle in one direction, not wander.
+    img = read_png(os.path.join(MAPS_DIR, "hue-field.png"))
+    w, h, rows = img
+    y = h // 2
+    hues, notes = [], []
+    for xi in range(24):
+        px = rows[y][(xi * 2 + 1) * w // 49]
+        got = read_colour(px)
+        hue = hue_q16(int(got[0] * 65535), int(got[1] * 65535), int(got[2] * 65535))
+        if hue < 0:
+            continue
+        hues.append(hue)
+        notes.append((hue + 5461) & 0xFFFF)
+    # Unwrap: the sweep crosses the wheel once, so allow a single wrap.
+    rises = sum(1 for i in range(len(hues) - 1) if ((hues[i + 1] - hues[i]) & 0xFFFF) < 32768)
+    check("hue field: scanning across it walks the colour wheel one way",
+          rises >= len(hues) - 2, f"{rises} of {len(hues)-1} steps forward")
+    check("hue field: it covers most of the wheel",
+          max(hues) - min(hues) > 40000, f"span {(max(hues)-min(hues))/65535*360:.0f} degrees")
+
+    # 3. The red/green field is Mode 4's pad: the two axes must move the two
+    # channels independently, which is what makes it usable as an X/Y surface.
+    img = read_png(os.path.join(MAPS_DIR, "rg-field.png"))
+    w, h, rows = img
+    xs = [int(w * 0.05), int(w * 0.3), int(w * 0.55), int(w * 0.75)]
+    ys = [int(h * 0.05), int(h * 0.35), int(h * 0.65), int(h * 0.95)]
+    grid = [[read_colour(rows[y][x]) for x in xs] for y in ys]
+    across = [sum(row[i][0] for row in grid) / len(grid) for i in range(len(xs))]
+    down = [sum(cell[1] for cell in row) / len(row) for row in grid]
+    check("red/green field: one axis sweeps red",
+          max(across) - min(across) > 0.3,
+          "red across: " + ", ".join(f"{v:.2f}" for v in across))
+    check("red/green field: the other sweeps green",
+          max(down) - min(down) > 0.3,
+          "green down: " + ", ".join(f"{v:.2f}" for v in down))
+
+    # 4. The barcode is black and white, so Mode 3's luminance path should see
+    # bars, and the colour channels should agree with each other throughout.
+    img = read_png(os.path.join(MAPS_DIR, "barcode.png"))
+    w, h, rows = img
+    y = h // 2
+    seen = [read_colour(rows[y][x * w // 64]) for x in range(64)]
+    neutral = max(max(c) - min(c) for c in seen)
+    lumas = [sum(c) / 3 for c in seen]
+    check("barcode: reads as neutral black and white, not tinted",
+          neutral < 0.25, f"widest colour spread {neutral:.2f}")
+    check("barcode: bars and spaces are far apart in level",
+          max(lumas) - min(lumas) > 0.5, f"level span {max(lumas)-min(lumas):.2f}")
+
+
 def main():
     check_fastmath()
     check_sensors()
     check_response_curve()
     check_crosstalk()
     check_calibration_kind()
+    check_real_maps()
     check_osc()
     check_svf()
     check_fold()
