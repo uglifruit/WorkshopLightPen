@@ -24,6 +24,7 @@ pico_sdk_init()
 add_executable(${CARD_NAME}
   main.cpp
   fastmath.cpp
+  sensors.cpp
   tape.cpp
   modes/mirror.cpp
   modes/triad.cpp

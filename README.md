@@ -36,18 +36,26 @@ Two exceptions: during calibration the right column shows the *raw* readings ins
 
 ## Calibration
 
-Calibrate once with the paper you'll scan and the light you'll use. The card remembers it through power-off. If all six LEDs blink when the card starts, it hasn't been calibrated yet.
+Calibrate once with the material you'll scan and the light you'll use. The card remembers it through power-off. If all six LEDs blink when the card starts, it hasn't been calibrated yet.
 
-1. Hold the switch **Down** while powering on, then release it.
-2. **White:** LED 0 (top left) blinks. Point the wand at white paper and tap **Down**. The LEDs fill up while it measures.
-3. **Black:** LEDs 0 and 2 blink. Point the wand at black card and tap **Down**.
-4. All six LEDs light, the card saves the calibration and restarts in Mode 1.
+Hold the switch **Down** while powering on and release it. The card then takes **five captures, one per tap of Down** — red, green, blue, white, black. Each tap averages about a third of a second, so hold still through it. **Up** cancels and keeps whatever was already saved.
 
-While it waits for each tap, the right-hand LEDs show the raw red, green and blue readings, so you can see the wand is responding.
+There's no mode to choose, because what you show it says which calibration you meant:
 
-If a colour barely changes between white and black (a loose LDR, or both taps on the same surface), that colour's right-hand LED flashes fast for two seconds and calibration starts again at white. Pushing the switch **Up** at any point cancels and keeps the previous calibration.
+- **For colour**, show it the three primaries: use [the calibration target page](tools/calibration-target.html), which puts full-screen red, green and blue up in the right order, then white, then black card.
+- **For level only**, show it **white for the first four taps** and black for the fifth. The card sees four identical bright readings, understands that you didn't offer it any colours, and calibrates level and curve alone.
 
-After calibration, black reads as zero and white as full scale on every channel, so the three gels read on the same scale even though each passes a different amount of light.
+It can always tell the two apart, because on a screen white is the sum of the primaries — so at least one sensor always reads white clearly brighter than the dimmest primary, while four looks at the same sheet of paper barely differ at all.
+
+While it waits for each tap, the **left** LEDs show the live red, green and blue readings so you can aim, and the **right** LEDs show what to point it at: top for red, middle for green, bottom for blue, all three for white, all three dimmed for black. (Doing the white-only version? Ignore the colour cues and just keep showing white until it asks for black.)
+
+Before it saves, it blinks **two LEDs or five** to tell you which calibration it recorded. Then all six light, and it restarts. On the way back up, a five-capture calibration reports how well your gels tell colours apart — one LED for barely, five for cleanly. Three blinking means the colours overlapped too much to use, so it kept the white/black part only. Those numbers are the quickest way to compare gels, or to see whether sleeving the sensors to stop light leaking between them helped.
+
+If a colour barely changes between white and black (a loose sensor, or two taps on the same surface), that colour's LED flashes fast and the sequence restarts.
+
+**What calibration actually does.** Black reads zero and white reads full on every channel, so the three gels read alike even though each passes a different amount of light. It also straightens each colour's response: an LDR's resistance follows a power law, so a raw reading bunches up at the bright end — worst on whichever gel passes most light, usually red, which otherwise races to full and then stops responding. With five captures it additionally un-mixes the colours, so blue reads as blue rather than as a grey lift on all three.
+
+Two things to know: calibrate against the screen or print you'll actually use, because a different panel (or the same one in night mode) is a different set of colours; and after a five-point calibration, warm room light reads as mostly red rather than as a grey lift — which is more truthful, but does change how the ambient-light modes feel. Two captures remain the better choice for non-screen work.
 
 ## Modes
 

@@ -138,8 +138,13 @@ private:
 	{
 		calibrating_ = false;
 		EnterMode();
-		// All six blinking over the mode flash: no calibration saved yet.
+		// Over the mode flash: all six blinking means nothing is calibrated;
+		// three blinking means a five-point calibration could not be used and
+		// its white/black is standing in; otherwise a steady bar reports how
+		// well the gels separate colour, 1 (barely) to 5 (cleanly).
 		if (!haveCalibration_) leds_.Flash(6, true);
+		else if (sensors_.Quality() & kQualLowSep) leds_.Flash(3, true);
+		else if (sensors_.SeparationBars() > 0) leds_.Flash(sensors_.SeparationBars(), false);
 	}
 
 	void CalibrationSample(const RawRGB &raw)

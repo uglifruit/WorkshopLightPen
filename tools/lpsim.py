@@ -131,31 +131,414 @@ def check_fastmath():
     check("slew_exact always lands on its target (shift 5..14)", reach)
 
 
-# --- sensors.h ----------------------------------------------------------------
+# --- sensors.h / sensors.cpp ----------------------------------------------------
+#
+# Integer mirror of the whole calibration: the boot maths (gamma search,
+# un-mix matrix, damping, tables) as well as the per-sample path. The boot
+# maths is where the bugs live — underflow in R^(-1/gamma), the 64-bit
+# promotions in the cofactors, the sign of the exponent — so it is mirrored
+# exactly, C truncation and all.
 
 MIN_SPAN = 64
+SUPPLY, INPUT_OHMS, SERIES_OHMS = 2048, 120000, 1000
+LUT_SIZE = GAIN_SIZE = 513
+LIGHT_CEIL, LIGHT_FLOOR = 262140, -65536
+ROW_BUDGET = 6144
+Q24 = 1 << 24
+GAMMA_LO, GAMMA_HI, GAMMA_DEF = 26214, 78643, 45875
+MAX_ROW_L1 = 6 * Q24
+MIN_SEP = 1966
+CAPTURE_MIN, CAPTURE_MAX = 16, 2040
+
+QUAL_GAMMA_DEFAULT, QUAL_ROW_CLAMPED, QUAL_LOW_SEP = 1, 2, 4
+
+LOG2 = [round(65536 * math.log2(1 + i / 32)) for i in range(33)]
+EXP2 = [round(65536 * 2 ** (i / 32)) for i in range(33)]
+
+
+def log2_q16(v):
+    if v == 0:
+        return 0
+    msb = v.bit_length() - 1
+    m = (v >> (msb - 16)) if msb >= 16 else (v << (16 - msb))
+    x = m - 65536
+    i, f = x >> 11, x & 0x7FF
+    a, b = LOG2[i], LOG2[i + 1]
+    return (msb << 16) + (a + (((b - a) * f) >> 11))
+
+
+def exp2_q16(x):
+    w, f = x >> 16, x & 0xFFFF
+    a, b = EXP2[f >> 11], EXP2[(f >> 11) + 1]
+    m = a + (((b - a) * (f & 0x7FF)) >> 11)
+    if w >= 15:
+        return 2**31 - 1
+    if w >= 0:
+        return m << w
+    if w < -17:
+        return 0
+    return (m + (1 << (-w - 1))) >> -w
+
+
+def ldr_ohms(n):
+    if n < 1:
+        n = 1
+    if n >= SUPPLY:
+        return 1
+    return max(i32(INPUT_OHMS * (SUPPLY - n)) // n - SERIES_OHMS, 1)
+
+
+def log_ohms(n):
+    return log2_q16(ldr_ohms(n))
+
+
+def reading_for(r_ohms):
+    """The raw reading an LDR of this resistance gives — the model inverted."""
+    return round(SUPPLY * INPUT_OHMS / (INPUT_OHMS + r_ohms + SERIES_OHMS))
+
+
+def light_at(log_r, log_white, t):
+    return exp2_q16(clamp((-t * (log_r - log_white)) >> 16, -32 * 65536, 8 * 65536))
+
+
+def additivity(gamma, log_r):
+    t = (65536 << 16) // gamma
+    s = sum(light_at(log_r[j], log_r[0], t) for j in (1, 2, 3))
+    return 65536 - s + 2 * light_at(log_r[4], log_r[0], t)
+
+
+def solve_gamma(log_r):
+    if not (additivity(GAMMA_LO, log_r) > 0 and additivity(GAMMA_HI, log_r) < 0):
+        return GAMMA_DEF, True
+    lo, hi = GAMMA_LO, GAMMA_HI
+    for _ in range(12):
+        mid = (lo + hi) >> 1
+        if additivity(mid, log_r) > 0:
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) >> 1, False
 
 
 def fail_mask(black, white):
     return sum(1 << i for i in range(3) if -MIN_SPAN < white[i] - black[i] < MIN_SPAN)
 
 
-def calib_scale(black, white):
-    span = white - black
-    mag = abs(span)
-    s = (65535 * 256 + mag - 1) // mag
-    return -s if span < 0 else s
-
-
-def sensor_u(raw, black, scale, gain_q10):
-    """SensorPipeline::Channel before the slew."""
-    u = i32((raw - black) * scale) >> 8
-    u = clamp(u, 0, 262143)
-    return clamp(i32(u * gain_q10) >> 10, 0, 65535)
-
-
 def gain_q10(x):
     return pow2_scale(65536, (x - 2048) * 4) >> 6
+
+
+def curve_at(lut, raw):
+    n = clamp(raw, -2048, 2047) + 2048
+    k, fr = n >> 3, n & 7
+    a = lut[k]
+    return a + (i32((lut[k + 1] - a) * fr) >> 3)
+
+
+def normalise(lut, n_black, n_white):
+    u_b, u_w = curve_at(lut, n_black), curve_at(lut, n_white)
+    if u_w - u_b < 4096:
+        return lut
+    return [clamp(cdiv((v - u_b) * 65535, u_w - u_b), LIGHT_FLOOR, LIGHT_CEIL) for v in lut]
+
+
+def build_two_point(white, black):
+    """SensorPipeline::BuildTwoPoint, one channel."""
+    model = white > black and black > 0 and white < SUPPLY
+    if model:
+        log_w, log_b = log_ohms(white), log_ohms(black)
+        span = log_b - log_w
+        if span < 4096:
+            model = False
+    lut = []
+    for i in range(LUT_SIZE):
+        n = (i << 3) - 2048
+        if model:
+            u = cdiv((log_b - log_ohms(n)) * 65535, span)
+        else:
+            u = cdiv((n - black) * 65535, white - black)
+        lut.append(clamp(u, LIGHT_FLOOR, LIGHT_CEIL))
+    return normalise(lut, black, white)
+
+
+def build_gain_table(l0):
+    one = 16 << 16
+    den = max(log2_q16(65536 + ((65536 << 16) // l0)) - one, 1)
+    gain = [0] * GAIN_SIZE
+    for k in range(1, GAIN_SIZE):
+        v = k << 9
+        arg = 65536 + ((v << 16) // l0)
+        num = log2_q16(arg) - one
+        curve = cdiv(num << 16, den)
+        gain[k] = cdiv(curve << 12, v)
+    gain[0] = gain[1]
+    return gain
+
+
+def invert24(m):
+    c = [[0] * 3 for _ in range(3)]
+    c[0][0] = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) >> 24
+    c[0][1] = -((m[1][0] * m[2][2] - m[1][2] * m[2][0]) >> 24)
+    c[0][2] = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) >> 24
+    c[1][0] = -((m[0][1] * m[2][2] - m[0][2] * m[2][1]) >> 24)
+    c[1][1] = (m[0][0] * m[2][2] - m[0][2] * m[2][0]) >> 24
+    c[1][2] = -((m[0][0] * m[2][1] - m[0][1] * m[2][0]) >> 24)
+    c[2][0] = (m[0][1] * m[1][2] - m[0][2] * m[1][1]) >> 24
+    c[2][1] = -((m[0][0] * m[1][2] - m[0][2] * m[1][0]) >> 24)
+    c[2][2] = (m[0][0] * m[1][1] - m[0][1] * m[1][0]) >> 24
+    det = (m[0][0] * c[0][0] + m[0][1] * c[0][1] + m[0][2] * c[0][2]) >> 24
+    if det < (Q24 >> 8):
+        return None, det
+    return [[cdiv(c[j][i] << 24, det) for j in range(3)] for i in range(3)], det
+
+
+def row_scale_max_l1(a):
+    clamped = False
+    worst = 0
+    for i in range(3):
+        row_sum = a[i][0] + a[i][1] + a[i][2]
+        scale = Q24
+        if row_sum > 0:
+            scale = cdiv(Q24 << 24, row_sum)
+        if scale < Q24 // 2:
+            scale, clamped = Q24 // 2, True
+        if scale > 2 * Q24:
+            scale, clamped = 2 * Q24, True
+        l1 = 0
+        for j in range(3):
+            a[i][j] = (a[i][j] * scale) >> 24
+            l1 += abs(a[i][j])
+        worst = max(worst, l1)
+    return worst, clamped
+
+
+def shrink_invert(m, sigma, beta):
+    reg = [[((Q24 - beta) * m[i][j]) >> 24 for j in range(3)] for i in range(3)]
+    for i in range(3):
+        reg[i][i] += (beta * sigma[i]) >> 24
+    a, _ = invert24(reg)
+    if a is None:
+        return None, 0, False
+    l1, clamped = row_scale_max_l1(a)
+    return a, l1, clamped
+
+
+def separation(m):
+    norm = []
+    for j in range(3):
+        ssq = 0
+        for i in range(3):
+            v = m[i][j] >> 8
+            ssq += (v * v) >> 16
+        norm.append(max(isqrt_q16(min(ssq, 2**31 - 1)), 1))
+    c0 = (m[1][1] * m[2][2] - m[1][2] * m[2][1]) >> 24
+    c1 = (m[1][0] * m[2][2] - m[1][2] * m[2][0]) >> 24
+    c2 = (m[1][0] * m[2][1] - m[1][1] * m[2][0]) >> 24
+    det = (m[0][0] * c0 - m[0][1] * c1 + m[0][2] * c2) >> 24
+    den = max((((norm[0] * norm[1]) >> 16) * norm[2]) >> 16, 1)
+    return min((abs(det >> 8) << 16) // den, 65535)
+
+
+def isqrt_q16(x):
+    """fast_sqrt_q16: restoring bitwise integer sqrt."""
+    if x <= 0:
+        return 0
+    v, res, bit = x << 16, 0, 1 << 30
+    while bit > v:
+        bit >>= 2
+    while bit:
+        if v >= res + bit:
+            v -= res + bit
+            res = (res >> 1) + bit
+        else:
+            res >>= 1
+        bit >>= 2
+    return res
+
+
+class Pipeline:
+    """Mirror of SensorPipeline: what SetCalibration leaves in the object."""
+
+    def __init__(self, cal):
+        self.quality = 0
+        self.sep_bars = 0
+        self.a10 = [[1024 if i == j else 0 for j in range(3)] for i in range(3)]
+        self.gain = [4096] * GAIN_SIZE
+        self.lut = None
+        if cal.get("mode") == "five" and self._five(cal):
+            return
+        self.a10 = [[1024 if i == j else 0 for j in range(3)] for i in range(3)]
+        self.gain = [4096] * GAIN_SIZE
+        self.sep_bars = 0
+        self.lut = [build_two_point(cal["white"][ch], cal["black"][ch]) for ch in range(3)]
+
+    def _five(self, cal):
+        white, black, prim = cal["white"], cal["black"], cal["prim"]
+        for ch in range(3):
+            if not (white[ch] > black[ch] > 0 and white[ch] < SUPPLY):
+                return False
+            for j in range(3):
+                p = prim[j][ch]
+                if p < black[ch] - 32 or p > white[ch] + 32:
+                    return False
+                if p < CAPTURE_MIN or p > CAPTURE_MAX:
+                    return False
+
+        defaulted = False
+        t = [0] * 3
+        black_light = [0] * 3
+        for ch in range(3):
+            log_r = [log_ohms(white[ch]), log_ohms(prim[0][ch]), log_ohms(prim[1][ch]),
+                     log_ohms(prim[2][ch]), log_ohms(black[ch])]
+            gamma, d = solve_gamma(log_r)
+            defaulted |= d
+            t[ch] = (65536 << 16) // gamma
+            black_light[ch] = light_at(log_r[4], log_r[0], t[ch])
+        if max(t) > 2 * min(t):
+            defaulted = True
+            for ch in range(3):
+                t[ch] = (65536 << 16) // GAMMA_DEF
+                black_light[ch] = light_at(log_ohms(black[ch]), log_ohms(white[ch]), t[ch])
+        if defaulted:
+            self.quality |= QUAL_GAMMA_DEFAULT
+
+        lut = []
+        for ch in range(3):
+            log_w, b = log_ohms(white[ch]), black_light[ch]
+            den = 65536 - b
+            if den < 4096:
+                return False
+            chan = []
+            for i in range(LUT_SIZE):
+                n = (i << 3) - 2048
+                u = light_at(log_ohms(n), log_w, t[ch])
+                chan.append(clamp(cdiv((u - b) << 16, den), LIGHT_FLOOR, LIGHT_CEIL))
+            lut.append(normalise(chan, black[ch], white[ch]))
+        self.lut = lut
+
+        m = [[0] * 3 for _ in range(3)]
+        sigma = [0] * 3
+        for i in range(3):
+            for j in range(3):
+                m[i][j] = clamp(curve_at(lut[i], prim[j][i]), 0, LIGHT_CEIL) << 8
+                sigma[i] += m[i][j]
+            if sigma[i] < (Q24 >> 4):
+                return False
+
+        sep = separation(m)
+        if sep < MIN_SEP:
+            self.quality |= QUAL_LOW_SEP
+            return False
+
+        lo, hi = Q24 // 100, Q24
+        best, max_l1, clamped = shrink_invert(m, sigma, hi)
+        if best is None:
+            return False
+        for _ in range(14):
+            mid = (lo + hi) // 2
+            cand, l1, c = shrink_invert(m, sigma, mid)
+            if cand is not None and l1 <= MAX_ROW_L1:
+                hi, best, clamped = mid, cand, c
+            else:
+                lo = mid
+        if clamped:
+            self.quality |= QUAL_ROW_CLAMPED
+
+        for i in range(3):
+            row = [clamp(best[i][j] >> 14, -ROW_BUDGET, ROW_BUDGET) for j in range(3)]
+            l1 = sum(abs(v) for v in row)
+            self.a10[i] = [cdiv(v * ROW_BUDGET, l1) if l1 > ROW_BUDGET else v for v in row]
+
+        b_avg = sum(black_light) // 3
+        self.gain = build_gain_table(clamp((b_avg << 16) // (65536 - b_avg), 1024, 16384))
+        self.sep_bars = 5 if sep >= 19661 else 4 if sep >= 9830 else 3 if sep >= 5243 else 2
+        self.sep = sep
+        return True
+
+    def gain_at(self, v):
+        k, fr = v >> 9, v & 511
+        a = self.gain[k]
+        return a + (i32((self.gain[k + 1] - a) * fr) >> 9)
+
+    def read(self, raw, gq10=1024):
+        """SensorPipeline::Update, without the slew."""
+        light = [curve_at(self.lut[ch], raw[ch]) for ch in range(3)]
+        c = []
+        for i in range(3):
+            acc = i32(sum(self.a10[i][j] * light[j] for j in range(3)))
+            c.append(clamp(acc >> 10, 0, LIGHT_CEIL))
+        g = self.gain_at(max(c))
+        return [clamp(i32(i32(v * g) >> 12) * gq10 >> 10, 0, 65535) for v in c]
+
+
+def check_response_curve():
+    err = max(abs(log2_q16(v) / 65536 - math.log2(v)) for v in range(1, 300000, 7))
+    check("log2_q16 within 0.001 bits", err < 0.001, f"{err:.5f}")
+    # Q16 output, so relative precision necessarily runs out as the result
+    # gets small: at 2^-8 one count is already 0.4%. Hold it to a relative
+    # bound where the answer is big enough to carry one, and to a single
+    # count below that. Light is normalised to white (65536) and black sits
+    # at a few percent of that, so the whole working range is in the first case.
+    err = max(abs(exp2_q16(x) / 65536 / 2 ** (x / 65536) - 1)
+              for x in range(-4 * 65536, 8 * 65536, 499))
+    check("exp2_q16 within 2e-4 relative over the working range", err < 2e-4, f"{err:.2e}")
+    abs_err = max(abs(exp2_q16(x) - 65536 * 2 ** (x / 65536))
+                  for x in range(-17 * 65536, -4 * 65536, 499))
+    check("exp2_q16 within 1 count far below the working range", abs_err <= 1.0, f"{abs_err:.2f}")
+    mono = all(exp2_q16(x) <= exp2_q16(x + 1) for x in range(-65536, 65536, 7))
+    check("exp2_q16 monotonic", mono)
+    check("exp2_q16 exact at integers",
+          all(exp2_q16(k << 16) == 65536 << k for k in range(0, 8)))
+
+    ceiling = reading_for(1)
+    check("the 1k series caps the reading below full scale", ceiling == 2031, str(ceiling))
+    worst = max(abs(reading_for(ldr_ohms(n)) - n) for n in range(20, ceiling))
+    check("reading -> resistance -> reading is stable", worst <= 1, f"{worst} LSB")
+
+    # The R^(-1/gamma) underflow trap. Un-normalised, R^(-1/gamma) for a real
+    # resistance is ~1e-7 and vanishes in Q16 — normalising to the white
+    # capture is what keeps the numbers alive. What has to stay well clear of
+    # zero is the black reference, because it is the dark-subtraction's
+    # denominator; readings far darker than black may underflow, and do no harm.
+    worst_black, l0_lo, l0_hi = 65536, 65536, 0
+    for r_white in (10_000, 60_000, 200_000):
+        log_w = log_ohms(reading_for(r_white))
+        for refl in (0.03, 0.10, 0.25):          # a matte black card, at worst
+            log_b = log_ohms(reading_for(r_white / refl))
+            for gamma in (GAMMA_LO, GAMMA_DEF, GAMMA_HI):
+                b = light_at(log_b, log_w, (65536 << 16) // gamma)
+                worst_black = min(worst_black, b)
+                l0 = clamp((b << 16) // (65536 - b), 1024, 16384)
+                l0_lo, l0_hi = min(l0_lo, l0), max(l0_hi, l0)
+    check("the black reference never underflows to nothing", worst_black >= 1,
+          f"smallest {worst_black} of 65536")
+    check("the curve's knee stays inside its clamp for every black reference",
+          1024 <= l0_lo and l0_hi <= 16384, f"L0 {l0_lo/65536:.4f}..{l0_hi/65536:.4f}")
+
+    gels = {"red": (10_000, 200_000), "green": (25_000, 400_000), "blue": (60_000, 900_000)}
+    mids = {}
+    for name, (r_white, r_black) in gels.items():
+        white, black = reading_for(r_white), reading_for(r_black)
+        lut = build_two_point(white, black)
+        check(f"{name}: black reads 0, white reads full",
+              curve_at(lut, black) <= 2 and curve_at(lut, white) >= 65533,
+              f"{curve_at(lut, black)} .. {curve_at(lut, white)}")
+        mono = all(curve_at(lut, n) <= curve_at(lut, n + 1) for n in range(-2048, 2047))
+        check(f"{name}: response is monotonic", mono)
+        lw, lb = math.log2(ldr_ohms(white)), math.log2(ldr_ohms(black))
+        err = max(abs(curve_at(lut, n) - (lb - math.log2(ldr_ohms(n))) / (lb - lw) * 65535)
+                  for n in range(black, white + 1))
+        check(f"{name}: table within 0.3% of the exact curve", err < 200, f"{err/655.35:.2f}%")
+        mids[name] = curve_at(lut, reading_for(math.sqrt(r_white * r_black))) / 65535
+    check("mid-grey reads ~50% on every gel, not just one",
+          all(0.47 < m < 0.53 for m in mids.values()),
+          ", ".join(f"{k} {v*100:.0f}%" for k, v in mids.items()))
+
+    r_white, r_black = gels["red"]
+    white, black = reading_for(r_white), reading_for(r_black)
+    lin = (reading_for(math.sqrt(r_white * r_black)) - black) / (white - black)
+    check("linear-in-voltage would read mid-grey high (the original complaint)",
+          lin > 0.60, f"{lin*100:.0f}% linear vs {mids['red']*100:.0f}% corrected")
 
 
 def check_sensors():
@@ -163,8 +546,6 @@ def check_sensors():
     check("X gain 0.25x / 1x / ~4x (Q10)", g[0] == 256 and g[1] == 1024 and 4000 < g[2] <= 4096, str(g))
     shifts = [5 + ((y * 10) >> 12) for y in (0, 2048, 4095)]
     check("Y slew shift 5..14", shifts == [5, 10, 14], str(shifts))
-
-    check("default mapping matches sensors.h's initial scale", calib_scale(0, 2047) == 8196)
 
     cases = {
         "defaults": (0, 2047),
@@ -175,20 +556,19 @@ def check_sensors():
         "full range": (-2048, 2047),
     }
     for name, (black, white) in cases.items():
-        s = calib_scale(black, white)
         ends_ok = mono = True
         try:
+            pipe = Pipeline({"mode": "two", "white": [white] * 3, "black": [black] * 3})
             for gx in (0, 2048, 4095):
                 gq = gain_q10(gx)
-                ends_ok &= sensor_u(black, black, s, gq) == 0
+                ends_ok &= pipe.read([black] * 3, gq)[0] <= 2
                 if gx == 2048:
-                    ends_ok &= sensor_u(white, black, s, gq) == 65535
+                    ends_ok &= pipe.read([white] * 3, gq)[0] >= 65533
                 prev = -1
-                # Sweep every raw value, darkest to brightest.
                 step = 1 if white > black else -1
                 far_dark, far_bright = (-2048, 2047) if step == 1 else (2047, -2048)
                 for raw in range(far_dark, far_bright + step, step):
-                    u = sensor_u(raw, black, s, gq)
+                    u = pipe.read([raw] * 3, gq)[0]
                     mono &= u >= prev
                     prev = u
             overflow = False
@@ -197,10 +577,322 @@ def check_sensors():
         check(f"calibration '{name}': black->0, white->full, monotonic, no overflow",
               ends_ok and mono and not overflow)
 
-    mid = sensor_u(900, 300, calib_scale(300, 1500), 1024)
-    check("calibration midpoint reads half scale", abs(mid - 32768) < 64, str(mid))
     check("span check rejects 63, accepts 64",
           fail_mask([0, 0, 0], [63, -63, 64]) == 0b011 and fail_mask([0, 0, 0], [64, -64, 2000]) == 0)
+
+    # The two-point path must be EXACTLY what it was before the un-mix existed:
+    # identity matrix in Q10 and a unity gain table are both exact, so every
+    # reading must match the plain table lookup bit for bit.
+    same = True
+    for black, white in ((300, 1500), (0, 2047), (1500, 300)):
+        pipe = Pipeline({"mode": "two", "white": [white] * 3, "black": [black] * 3})
+        lut = build_two_point(white, black)
+        for gx in (0, 2048, 4095):
+            gq = gain_q10(gx)
+            for raw in range(-2048, 2048, 7):
+                want = clamp(i32(curve_at(lut, raw) * gq) >> 10, 0, 65535)
+                same &= pipe.read([raw] * 3, gq)[0] == want
+    check("two-point mode is bit-identical to the card before the un-mix", same)
+
+
+# --- cross-talk: the five-point calibration --------------------------------------
+
+class Wand:
+    """A synthetic wand: gels x cell response x inter-cell scatter, the LDR
+    power law, and the module's divider. The world is float; everything the
+    firmware sees is an integer reading."""
+
+    def __init__(self, gels, kappa, gamma, r_white, ambient, black_refl,
+                 abl=1.0, night=1.0, noise=0.0, rnd=None):
+        col = [sum(gels[i][j] for i in range(3)) for j in range(3)]
+        self.mix = [[gels[i][j] + kappa * col[j] for j in range(3)] for i in range(3)]
+        self.rowsum = [sum(self.mix[i]) for i in range(3)]
+        self.gamma, self.r_white, self.amb = gamma, r_white, ambient
+        self.black_refl, self.abl, self.night = black_refl, abl, night
+        self.noise, self.rnd = noise, rnd or random.Random(0)
+
+    def light(self, i, c):
+        tint = (1.0, 1.0, self.night)
+        lit = sum(self.mix[i][j] * c[j] * tint[j] for j in range(3)) / self.rowsum[i]
+        return lit + self.amb
+
+    def ohms(self, i, c):
+        ref = self.light(i, (self.abl,) * 3)
+        return self.r_white[i] * (self.light(i, c) / ref) ** (-self.gamma[i])
+
+    def raw(self, i, c):
+        r = self.ohms(i, c)
+        n = SUPPLY * INPUT_OHMS / (INPUT_OHMS + r + SERIES_OHMS)
+        if self.noise:
+            n += self.rnd.gauss(0, self.noise)
+        return clamp(round(n), -2048, 2047)
+
+    def capture(self, c):
+        """What a tap averages: the ADC noise mostly averages out."""
+        if not self.noise:
+            return [self.raw(i, c) for i in range(3)]
+        return [round(sum(self.raw(i, c) for _ in range(64)) / 64) for i in range(3)]
+
+    def calibration(self, five=True):
+        white = self.capture((self.abl,) * 3)
+        black = self.capture((self.black_refl,) * 3)
+        cal = {"mode": "five" if five else "two", "white": white, "black": black}
+        cal["prim"] = [self.capture(tuple(1.0 if k == j else 0.0 for k in range(3)))
+                       for j in range(3)]
+        return cal
+
+
+GELS = {
+    # gels[i][j]: what cell i sees of primary j, before scatter
+    "optimistic": [[1.00, 0.12, 0.10], [0.15, 0.95, 0.18], [0.12, 0.20, 0.70]],
+    "leaky":      [[0.90, 0.35, 0.30], [0.40, 0.85, 0.45], [0.35, 0.40, 0.50]],
+    "marginal":   [[0.88, 0.40, 0.36], [0.45, 0.82, 0.50], [0.40, 0.45, 0.48]],
+    "awful":      [[0.80, 0.60, 0.55], [0.60, 0.75, 0.65], [0.55, 0.60, 0.55]],
+    "hopeless":   [[0.70, 0.68, 0.66], [0.68, 0.70, 0.68], [0.66, 0.68, 0.67]],
+}
+
+
+def make_wand(name, **kw):
+    opts = dict(kappa=0.10, gamma=(0.70, 0.75, 0.65),
+                r_white=(12_000, 30_000, 70_000), ambient=0.03, black_refl=0.05)
+    opts.update(kw)
+    return Wand(GELS[name], **opts)
+
+
+def looks_two_point(cal):
+    """CapturesLookTwoPoint: are the four bright captures one surface, shown
+    four times? That is how a two-point calibration is asked for."""
+    for ch in range(3):
+        span = abs(cal["white"][ch] - cal["black"][ch])
+        tol = max(span // 6, 32)
+        for j in range(3):
+            if abs(cal["white"][ch] - cal["prim"][j][ch]) > tol:
+                return False
+    return True
+
+
+def check_calibration_kind():
+    # Four presentations of white, with a hand that wanders more than it
+    # should, must still read as a two-point calibration.
+    rnd = random.Random(19)
+    for name in GELS:
+        for jitter, label in ((8, "steady hand"), (40, "wandering hand")):
+            w = make_wand(name)
+            white = w.capture((1.0, 1.0, 1.0))
+            cal = {"mode": "five", "white": white, "black": w.capture((0.05,) * 3),
+                   "prim": [[v + rnd.randint(-jitter, jitter) for v in white] for _ in range(3)]}
+            check(f"{name}, {label}: white shown four times reads as two-point",
+                  looks_two_point(cal))
+
+    # A real set of primaries never does, however badly the gels overlap:
+    # white is their sum, so at least one cell sees it clearly brighter.
+    for name in GELS:
+        cal = make_wand(name).calibration()
+        margins = []
+        for ch in range(3):
+            span = abs(cal["white"][ch] - cal["black"][ch])
+            gap = max(abs(cal["white"][ch] - cal["prim"][j][ch]) for j in range(3))
+            margins.append(gap / max(span // 6, 32))
+        check(f"{name}: real primaries read as five-point",
+              not looks_two_point(cal),
+              f"widest gap is {max(margins):.1f}x the tolerance")
+
+    # And a mis-read is harmless: four near-identical 'primaries' make a
+    # singular matrix, which the separability test declines.
+    w = make_wand("leaky")
+    white = w.capture((1.0, 1.0, 1.0))
+    cal = {"mode": "five", "white": white, "black": w.capture((0.05,) * 3),
+           "prim": [[v + rnd.randint(-70, 70) for v in white] for _ in range(3)]}
+    pipe = Pipeline(cal)
+    check("a two-point capture mistaken for five-point degrades safely",
+          pipe.sep_bars == 0 and all(0 <= v <= 65535 for v in pipe.read(white)))
+
+
+def check_crosstalk():
+    blue, red, green = (0, 0, 1), (1, 0, 0), (0, 1, 0)
+
+    # The bench complaint, reproduced against the old pipeline.
+    w = make_wand("leaky")
+    two = Pipeline(w.calibration(five=False))
+    before = [v / 65535 for v in two.read(w.capture(blue))]
+    check("the reported symptom reproduces: blue reads grey on a two-point card",
+          max(before) - min(before) < 0.30,
+          "blue -> " + ", ".join(f"{v:.2f}" for v in before))
+
+    results = {}
+    for name in GELS:
+        w = make_wand(name)
+        pipe = Pipeline(w.calibration())
+        results[name] = pipe
+        got = [v / 65535 for v in pipe.read(w.capture(blue))]
+        sep = got[2] - max(got[0], got[1])
+        if name in ("awful", "hopeless"):
+            # Too little to separate: it must decline the job, not guess.
+            check(f"{name}: declines rather than amplifying noise",
+                  pipe.sep_bars == 0 and (pipe.quality & QUAL_LOW_SEP) != 0,
+                  f"bars {pipe.sep_bars}, blue -> " + ", ".join(f"{v:.2f}" for v in got))
+            continue
+        check(f"{name}: blue reads blue, not grey", sep >= 0.30,
+              "blue -> " + ", ".join(f"{v:.2f}" for v in got) +
+              f"  (separation {sep:.2f}, was {before[2]-max(before[0],before[1]):.2f})")
+
+    for name in ("optimistic", "leaky", "marginal"):
+        w = make_wand(name)
+        pipe = results[name]
+        for label, c, idx in (("red", red, 0), ("green", green, 1)):
+            got = [v / 65535 for v in pipe.read(w.capture(c))]
+            check(f"{name}: {label} reads {label}",
+                  got[idx] - max(got[k] for k in range(3) if k != idx) >= 0.25,
+                  ", ".join(f"{v:.2f}" for v in got))
+
+    # White, black and grey.
+    for name in ("optimistic", "leaky", "marginal", "awful"):
+        w = make_wand(name)
+        pipe = results[name]
+        white = [v / 65535 for v in pipe.read(w.capture((1.0, 1.0, 1.0)))]
+        black = pipe.read(w.capture((w.black_refl,) * 3))
+        grey = [v / 65535 for v in pipe.read(w.capture((0.5, 0.5, 0.5)))]
+        check(f"{name}: white reads full on all three", min(white) >= 0.98,
+              ", ".join(f"{v:.2f}" for v in white))
+        check(f"{name}: black reads zero", max(black) == 0, str(black))
+        check(f"{name}: grey stays neutral (this is what the gamma ratios buy)",
+              max(grey) - min(grey) <= 0.08,
+              ", ".join(f"{v:.2f}" for v in grey))
+
+    # Degrading safely.
+    w = make_wand("hopeless")
+    pipe = results["hopeless"]
+    got = pipe.read(w.capture(blue))
+    check("hopeless gels: falls back rather than exploding",
+          pipe.sep_bars == 0 and (pipe.quality & QUAL_LOW_SEP) != 0
+          and all(0 <= v <= 65535 for v in got),
+          f"bars {pipe.sep_bars}, quality {pipe.quality}")
+
+    # Row budget and the int32 accumulator — the load-bearing check.
+    peak = 0
+    overflow = False
+    try:
+        for name in GELS:
+            w = make_wand(name)
+            pipe = results[name]
+            budget_ok = all(sum(abs(v) for v in pipe.a10[i]) <= ROW_BUDGET for i in range(3))
+            check(f"{name}: every matrix row inside its budget", budget_ok,
+                  str([sum(abs(v) for v in pipe.a10[i]) for i in range(3)]))
+            # The worst case needs the three channels set INDEPENDENTLY: the
+            # un-mix has negative coefficients, so the accumulator only peaks
+            # when the light vector lines up with their signs. Sweeping the
+            # channels together never gets there.
+            extremes = (-2048, 0, 1024, 2031, 2047)
+            for gx in (0, 2048, 4095):
+                gq = gain_q10(gx)
+                for a in extremes:
+                    for b in extremes:
+                        for c in extremes:
+                            vals = [a, b, c]
+                            pipe.read(vals, gq)
+                            light = [curve_at(pipe.lut[ch], vals[ch]) for ch in range(3)]
+                            for i in range(3):
+                                peak = max(peak, abs(sum(pipe.a10[i][j] * light[j] for j in range(3))))
+                for raw in range(-2048, 2048, 7):
+                    pipe.read([raw, 2047, -2048], gq)
+    except OverflowError:
+        overflow = True
+    check("no int32 overflow anywhere in the runtime path", not overflow)
+    # The pessimistic bound is row budget x light ceiling = 1.61e9. The real
+    # worst case is lower, because the table's negative headroom is only
+    # -65536 while its positive headroom is 262140, so negative coefficients
+    # cannot contribute their full share. Both are inside int32; this asserts
+    # the sweep gets close enough to have tested the real one.
+    check("the overflow sweep reaches the tight spot",
+          peak > 8.0e8, f"peak accumulator {peak:.3e}, bound 1.61e9, int32 2.147e9")
+
+    # Gamma: ratios recovered, and the fallback fires on a grey 'black'.
+    w = make_wand("leaky")
+    cal = w.calibration()
+    est = []
+    for ch in range(3):
+        log_r = [log_ohms(cal["white"][ch])] + [log_ohms(cal["prim"][j][ch]) for j in range(3)]
+        log_r.append(log_ohms(cal["black"][ch]))
+        g, _ = solve_gamma(log_r)
+        est.append(g / 65536)
+    ratios_ok = all(abs(est[ch] / est[0] - w.gamma[ch] / w.gamma[0]) < 0.08 for ch in range(3))
+    check("gamma ratios recovered within 8% (absolute value is not the claim)",
+          ratios_ok, ", ".join(f"{v:.3f}" for v in est) +
+          " vs true " + ", ".join(f"{v:.2f}" for v in w.gamma))
+
+    grey_ref = make_wand("leaky", black_refl=0.20)
+    cal = grey_ref.calibration()
+    defaulted = False
+    for ch in range(3):
+        log_r = [log_ohms(cal["white"][ch])] + [log_ohms(cal["prim"][j][ch]) for j in range(3)]
+        log_r.append(log_ohms(cal["black"][ch]))
+        _, d = solve_gamma(log_r)
+        defaulted |= d
+    check("a grey card used as 'black' is detected, not silently believed", defaulted)
+
+    # Room light shifts the absolute exponents — the black CARD is not true
+    # dark, so the constraint's "black" term carries some of it. What has to
+    # hold is the RATIOS between the three cells, since those are what keep a
+    # grey card neutral, and the end-to-end result.
+    ratios, greys = [], []
+    for amb in (0.0, 0.05, 0.15):
+        w = make_wand("leaky", ambient=amb)
+        cal = w.calibration()
+        est = []
+        for ch in range(3):
+            log_r = [log_ohms(cal["white"][ch])] + [log_ohms(cal["prim"][j][ch]) for j in range(3)]
+            log_r.append(log_ohms(cal["black"][ch]))
+            g, _ = solve_gamma(log_r)
+            est.append(g / 65536)
+        ratios.append((est[1] / est[0], est[2] / est[0]))
+        grey = [v / 65535 for v in Pipeline(cal).read(w.capture((0.5, 0.5, 0.5)))]
+        greys.append(max(grey) - min(grey))
+    spread = max(max(abs(r[k] - s[k]) for k in (0, 1)) for r in ratios for s in ratios)
+    check("ambient light does not move the gamma RATIOS", spread < 0.08, f"{spread:.3f}")
+    check("grey stays neutral at every ambient level", max(greys) <= 0.08,
+          ", ".join(f"{v:.3f}" for v in greys))
+
+    # A dimming panel and night mode must not break white.
+    for label, kw in (("panel dims full white", {"abl": 0.80}),
+                      ("night mode", {"night": 0.60})):
+        w = make_wand("leaky", **kw)
+        pipe = Pipeline(w.calibration())
+        white = [v / 65535 for v in pipe.read(w.capture((w.abl,) * 3))]
+        got = [v / 65535 for v in pipe.read(w.capture(blue))]
+        check(f"{label}: white still reads full and blue still reads blue",
+              min(white) >= 0.97 and got[2] - max(got[0], got[1]) >= 0.25,
+              "white " + ",".join(f"{v:.2f}" for v in white) +
+              " blue " + ",".join(f"{v:.2f}" for v in got))
+
+    # Noise, through the slew the modes actually see.
+    rnd = random.Random(11)
+    w = make_wand("leaky", noise=2.0, rnd=rnd)
+    pipe = Pipeline(w.calibration())
+    state = [0, 0, 0]
+    seen = [[], [], []]
+    for _ in range(4000):
+        u = pipe.read([w.raw(i, (0.5, 0.5, 0.5)) for i in range(3)])
+        for ch in range(3):
+            state[ch] = slew_exact(state[ch], u[ch], 5)
+            seen[ch].append(state[ch])
+    worst = 0.0
+    for s in seen:
+        tail = s[1000:]
+        mean = sum(tail) / len(tail)
+        worst = max(worst, math.sqrt(sum((v - mean) ** 2 for v in tail) / len(tail)))
+    check("2 LSB of ADC noise stays under 0.5% of full scale after the slew",
+          worst < 328, f"{worst:.0f} counts rms")
+
+    # Mode 6 consumes this: a blue patch must land on blue in hue terms.
+    w = make_wand("leaky")
+    pipe = results["leaky"]
+    got = pipe.read(w.capture(blue))
+    hue = HueOrganMode_hue(got[0], got[1], got[2])
+    check("Mode 6 sees the blue patch as blue", abs(hue - 43691) < 4000, f"hue {hue}")
+
+
+def HueOrganMode_hue(r, g, b):
+    return hue_q16(r, g, b)
 
 
 # --- osc.h --------------------------------------------------------------------
@@ -711,6 +1403,9 @@ def check_tape_modes():
 def main():
     check_fastmath()
     check_sensors()
+    check_response_curve()
+    check_crosstalk()
+    check_calibration_kind()
     check_osc()
     check_svf()
     check_fold()

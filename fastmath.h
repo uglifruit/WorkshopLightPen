@@ -122,6 +122,85 @@ static inline int32_t pow2_scale(int32_t base, int32_t octQ12)
 }
 
 // ---------------------------------------------------------------------------
+// Logarithm
+// ---------------------------------------------------------------------------
+
+// log2(1 + i/32) in Q16, 33 entries so the interpolator can read i+1. 32-bit
+// because the last entry, log2(2), is 65536 exactly.
+extern const uint32_t kLog2Table[33];
+
+/// log2 of a positive integer, Q16. Exponent from the leading bit, mantissa
+/// from the table above: within 0.0002 bits. Used to spread each LDR evenly
+/// across its own resistance range, which is boot-time work — the Cortex-M0+
+/// has no CLZ instruction, so this is not for the audio path.
+static inline int32_t log2_q16(uint32_t v)
+{
+	if (v == 0) return 0;
+	int msb = 31 - __builtin_clz(v);
+	// Mantissa as Q16 in [1, 2): 65536..131071.
+	uint32_t m = (msb >= 16) ? (v >> (msb - 16)) : (v << (16 - msb));
+	uint32_t x = m - 65536;
+	uint32_t i = x >> 11;
+	uint32_t f = x & 0x7FF;
+	uint32_t a = kLog2Table[i];
+	uint32_t b = kLog2Table[i + 1];
+	return (msb << 16) + static_cast<int32_t>(a + (((b - a) * f) >> 11));
+}
+
+// 2^(i/32) in Q16, 33 entries so the interpolator can read i+1.
+extern const uint32_t kExp2Table[33];
+
+/// 2^x for x in Q16, returning Q16, saturating. The mirror of log2_q16, and
+/// good to 6e-5 relative — pow2_scale is NOT a substitute here: its 6%
+/// mid-octave error would put a visible ripple on the sensor response law.
+/// Boot-time work, like log2_q16.
+static inline int32_t exp2_q16(int32_t xQ16)
+{
+	int32_t  w = xQ16 >> 16;                              // floors, also for negatives
+	uint32_t f = static_cast<uint32_t>(xQ16) & 0xFFFF;
+	uint32_t a = kExp2Table[f >> 11];
+	uint32_t b = kExp2Table[(f >> 11) + 1];
+	uint32_t m = a + (((b - a) * (f & 0x7FF)) >> 11);     // Q16 in [1, 2)
+	if (w >= 15) return INT32_MAX;
+	if (w >= 0)  return static_cast<int32_t>(m << w);
+	if (w < -17) return 0;
+	return static_cast<int32_t>((m + (1u << (-w - 1))) >> -w);   // round to nearest
+}
+
+/// base^exp for a positive base and exp in Q16. Boot-time only: two table
+/// lookups and a 64-bit multiply.
+static inline int32_t pow_q16(uint32_t base, int32_t expQ16)
+{
+	if (base == 0) return 0;
+	int64_t l = static_cast<int64_t>(log2_q16(base)) * expQ16;
+	return exp2_q16(static_cast<int32_t>(l >> 16));
+}
+
+/// Square root of a Q16 value, result Q16. Restoring bitwise integer sqrt:
+/// no libm, no divide, bounded at 16 iterations. Boot-time only here.
+static inline int32_t fast_sqrt_q16(int32_t x)
+{
+	if (x <= 0) return 0;
+	uint32_t v = static_cast<uint32_t>(x) << 16;   // sqrt(x/2^16)*2^16 == sqrt(x*2^16)
+	uint32_t res = 0;
+	uint32_t bit = 1u << 30;
+	while (bit > v) bit >>= 2;
+	while (bit)
+	{
+		if (v >= res + bit) { v -= res + bit; res = (res >> 1) + bit; }
+		else                { res >>= 1; }
+		bit >>= 2;
+	}
+	return static_cast<int32_t>(res);
+}
+
+static inline int32_t max3_i32(int32_t a, int32_t b, int32_t c)
+{
+	int32_t m = a > b ? a : b;
+	return m > c ? m : c;
+}
+
+// ---------------------------------------------------------------------------
 // Pitch
 // ---------------------------------------------------------------------------
 
