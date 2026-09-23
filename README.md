@@ -96,6 +96,13 @@ cmake --build build
 
 This produces `build/lightpen.uf2`.
 
+## Targets to scan
+
+Two pages in `tools/`, both meant to be opened full-screen and wanded across:
+
+- **[calibration-target.html](tools/calibration-target.html)** — the five calibration colours in capture order, with the LED cues and the display settings that would otherwise spoil the result.
+- **[colour-maps.html](tools/colour-maps.html)** — nine maps to scan once you're calibrated, each labelled with the mode it suits: the red/green field Mode 4 was built around, a hue sweep for the colour organ, barcodes and block noise for Mode 3, and saturated colour fields for the drone. <kbd>space</kbd> or arrows to move between them, <kbd>esc</kbd> to come back, number keys to jump. The images themselves are in `tools/colourmaps/`.
+
 ## Development tools
 
 `tools/lpsim.py` contains integer-exact Python versions of the card's fixed-point maths (filter, oscillators, knob curves, calibration, the barcode edge finder, the hue-to-note picker, the jog rate law and tape positioning, the switch debounce), with checks. Run it with `python tools/lpsim.py`. It needs no hardware.

@@ -1,0 +1,205 @@
+<title>Colour Map Viewer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  /* Deliberately single-theme, like the calibration targets it sits beside:
+     this is something you hold a light sensor against, so the chrome stays
+     dark whatever the viewer's theme, and the maps are shown untouched. */
+  :root {
+    --ground: #121315;
+    --panel: #1B1D21;
+    --panel-2: #23262B;
+    --line: #2E3238;
+    --ink: #E8E6E1;
+    --ink-dim: #9AA0A6;
+    --brass: #C9A227;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+  }
+  .wrap { padding: 16px; padding-block: 32px; max-width: 1080px; margin: 0 auto; box-sizing: border-box; }
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--brass); margin: 0 0 10px;
+  }
+  h1 { font-size: clamp(24px, 4.4vw, 32px); line-height: 1.15; margin: 0 0 10px; font-weight: 600; text-wrap: balance; }
+  .lede { margin: 0 0 8px; color: var(--ink-dim); max-width: 62ch; }
+  .keys { margin: 0 0 28px; color: var(--ink-dim); font-size: 13px; }
+  kbd {
+    font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 3px; padding: 1px 5px;
+  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+  .map {
+    display: grid; gap: 0; padding: 0; text-align: left;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+    overflow: hidden; cursor: pointer; font: inherit; color: inherit;
+  }
+  .map:hover { border-color: var(--brass); }
+  .map img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; background: #000; }
+  .map .meta { padding: 12px 14px; display: grid; gap: 4px; }
+  .map .name { font-weight: 600; }
+  .map .use { color: var(--ink-dim); font-size: 13px; }
+  .map .mode {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brass);
+  }
+  :focus-visible { outline: 2px solid var(--brass); outline-offset: 2px; }
+  button.ghost {
+    font: inherit; color: var(--ink); background: transparent;
+    border: 1px solid var(--line); border-radius: 4px; padding: 9px 16px; cursor: pointer;
+  }
+  button.ghost:hover { border-color: var(--brass); }
+  .toolbar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 24px; }
+
+  /* Viewer: the map, as big as it will go, on black. */
+  #viewer { position: fixed; inset: 0; background: #000; display: grid; place-items: center; cursor: pointer; }
+  #viewer img { max-width: 100%; max-height: 100%; width: auto; height: auto; display: block; }
+  #readout {
+    position: fixed; top: env(safe-area-inset-top, 0px); left: 0; margin: 14px;
+    background: rgba(12, 13, 15, 0.86); border: 1px solid var(--line); border-radius: 5px;
+    padding: 10px 13px; display: grid; gap: 6px;
+    max-width: min(320px, calc(100% - 28px)); transition: opacity 600ms ease;
+  }
+  #readout.faded { opacity: 0.1; }
+  @media (prefers-reduced-motion: reduce) { #readout { transition: none; } }
+  .r-name { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; letter-spacing: 0.06em; }
+  .r-name .of { color: var(--ink-dim); }
+  .r-use { color: var(--ink-dim); font-size: 12px; }
+</style>
+
+<div class="wrap" id="index">
+  <p class="eyebrow">LightPen · RGB sensor wand</p>
+  <h1>Colour Map Viewer</h1>
+  <p class="lede">
+    Targets to scan once the wand is calibrated. Pick one to fill the screen, then wand across it —
+    or press a number key. Each one suits a different mode.
+  </p>
+  <p class="keys">
+    <kbd>space</kbd> or <kbd>→</kbd> next · <kbd>←</kbd> previous · <kbd>esc</kbd> back here
+  </p>
+  <div class="toolbar">
+    <button class="ghost" id="fs">Go full screen</button>
+    <button class="ghost" id="first">Open the first map</button>
+  </div>
+  <div class="grid" id="grid"></div>
+</div>
+
+<div id="viewer" hidden>
+  <img id="view" alt="">
+  <div id="readout">
+    <div class="r-name"><span id="rName"></span> <span class="of">· <span id="rNum"></span> of <span id="rTotal"></span></span></div>
+    <div class="r-use" id="rUse"></div>
+  </div>
+</div>
+
+<script>
+  var MAPS = [
+    { file: "colourmaps/rg-field.png", name: "Red / Green Field", mode: "Mode 4 · scrub pad",
+      use: "Green across, red up, with white and black patches to one side. The map Mode 4 was built around." },
+    { file: "colourmaps/hue-field.png", name: "Hue Field", mode: "Mode 6 · colour organ",
+      use: "A full hue sweep left to right, lightening upward. Scan it sideways for a rising scale." },
+    { file: "colourmaps/gradient-bars.png", name: "Gradient Bars", mode: "Modes 1 & 6",
+      use: "Red to green, green to blue, red to blue. One pair at a time, for watching a single channel travel." },
+    { file: "colourmaps/barcode.png", name: "Barcode", mode: "Mode 3 · barcode reader",
+      use: "Bars of varying width. Hold Down and swipe: every bar triggers, the wide ones accent." },
+    { file: "colourmaps/block-noise.png", name: "Block Noise", mode: "Mode 3 · barcode reader",
+      use: "Random black and white blocks — denser and less regular than the barcode." },
+    { file: "colourmaps/circles.png", name: "Colour Circles", mode: "Mode 6 · colour organ",
+      use: "Discrete patches of colour: hunt one, hold it, and the note holds with you." },
+    { file: "colourmaps/pie.png", name: "Colour Pie", mode: "Mode 6 · colour organ",
+      use: "Hues arranged around a centre. Circle the middle to run through the scale." },
+    { file: "colourmaps/sphere.png", name: "Colour Sphere", mode: "Modes 2 & 6",
+      use: "Saturated colour falling off toward the edges, so hue and level move together." },
+    { file: "colourmaps/balls.png", name: "Colour Balls", mode: "Mode 2 · triad drone",
+      use: "Scattered saturated colour. Drift between them to swing the chord's three levels." }
+  ];
+
+  var index = document.getElementById("index");
+  var viewer = document.getElementById("viewer");
+  var view = document.getElementById("view");
+  var readout = document.getElementById("readout");
+  var rName = document.getElementById("rName");
+  var rUse = document.getElementById("rUse");
+  var rNum = document.getElementById("rNum");
+  var grid = document.getElementById("grid");
+  var idx = 0, fadeTimer = null;
+
+  document.getElementById("rTotal").textContent = String(MAPS.length);
+
+  MAPS.forEach(function (m, i) {
+    var el = document.createElement("button");
+    el.className = "map";
+    el.type = "button";
+    el.innerHTML =
+      '<img src="' + m.file + '" alt="' + m.name + '" loading="lazy">' +
+      '<span class="meta">' +
+        '<span class="mode">' + m.mode + "</span>" +
+        '<span class="name">' + (i + 1) + ". " + m.name + "</span>" +
+        '<span class="use">' + m.use + "</span>" +
+      "</span>";
+    el.addEventListener("click", function () { open(i); });
+    grid.appendChild(el);
+  });
+
+  function render() {
+    var m = MAPS[idx];
+    view.src = m.file;
+    view.alt = m.name;
+    rName.textContent = m.name;
+    rUse.textContent = m.use;
+    rNum.textContent = String(idx + 1);
+    readout.classList.remove("faded");
+    if (fadeTimer) clearTimeout(fadeTimer);
+    // Fade back, so the chrome cannot spill light onto the sensor.
+    fadeTimer = setTimeout(function () { readout.classList.add("faded"); }, 2400);
+  }
+
+  function open(i) {
+    idx = i;
+    index.hidden = true;
+    viewer.hidden = false;
+    render();
+  }
+
+  function close() {
+    viewer.hidden = true;
+    index.hidden = false;
+    if (fadeTimer) clearTimeout(fadeTimer);
+  }
+
+  function step(by) {
+    idx = (idx + by + MAPS.length) % MAPS.length;   // wraps, so it just keeps cycling
+    render();
+  }
+
+  document.getElementById("first").addEventListener("click", function () { open(0); });
+  document.getElementById("fs").addEventListener("click", function () {
+    var el = document.documentElement;
+    if (el.requestFullscreen) { el.requestFullscreen().catch(function () {}); }
+  });
+  viewer.addEventListener("click", function () { step(1); });
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key >= "1" && e.key <= "9") {
+      var n = Number(e.key) - 1;
+      if (n < MAPS.length) { open(n); e.preventDefault(); }
+      return;
+    }
+    if (viewer.hidden) {
+      if (e.key === " " || e.key === "Enter") { open(0); e.preventDefault(); }
+      return;
+    }
+    if (e.key === "Escape") { close(); }
+    else if (e.key === "ArrowLeft") { step(-1); e.preventDefault(); }
+    else if (e.key === " " || e.key === "Enter" || e.key === "ArrowRight") { step(1); e.preventDefault(); }
+  });
+</script>
