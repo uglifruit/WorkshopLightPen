@@ -98,10 +98,12 @@ This produces `build/lightpen.uf2`.
 
 ## Targets to scan
 
-Two pages in `tools/`, both meant to be opened full-screen and wanded across:
+Two pages, meant to be opened full-screen on whatever screen you'll scan — phone, tablet or monitor. Open them straight from the web:
 
-- **[calibration-target.html](tools/calibration-target.html)** — the five calibration colours in capture order, with the LED cues and the display settings that would otherwise spoil the result.
-- **[colour-maps.html](tools/colour-maps.html)** — nine maps to scan once you're calibrated, each labelled with the mode it suits: the red/green field Mode 4 was built around, a hue sweep for the colour organ, barcodes and block noise for Mode 3, and saturated colour fields for the drone. <kbd>space</kbd> or arrows to move between them, <kbd>esc</kbd> to come back, number keys to jump. The images themselves are in `tools/colourmaps/`.
+- **[Calibration targets](https://uglifruit.github.io/WorkshopLightPen/tools/calibration-target.html)** — the five calibration colours in capture order, with the LED cues and the display settings that would otherwise spoil the result.
+- **[Colour maps](https://uglifruit.github.io/WorkshopLightPen/tools/colour-maps.html)** — nine maps to scan once you're calibrated, each labelled with the mode it suits: the red/green field Mode 4 was built around, a hue sweep for the colour organ, barcodes and block noise for Mode 3, and saturated colour fields for the drone. <kbd>space</kbd> or arrows to move between them, <kbd>esc</kbd> to come back, number keys to jump.
+
+Both live in `tools/` in this repo ([calibration-target.html](tools/calibration-target.html), [colour-maps.html](tools/colour-maps.html)) with the images in `tools/colourmaps/`, so they work offline too — just open the file.
 
 ## Development tools
 

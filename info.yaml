@@ -1,6 +1,6 @@
 draft: true
 Name: LIGHTPEN
-short-description: An RGB light-sensor wand as a six-mode controller and sound source
+short-description: An RGB light-sensor wand as an eight-mode controller and sound source
 Language: C++ (ComputerCard)
 Creator: Andy Jenkinson (uglifruit)
 Version: "0.4.0"
@@ -9,7 +9,7 @@ License: CC-BY-4.0
 repository: https://github.com/uglifruit/WorkshopLightPen
 Editor: none
 date-created: 2026-09-16
-date-updated: 2026-09-16
+date-updated: 2026-09-23
 
 contact:
   social:
@@ -60,14 +60,25 @@ summary: |
   8 Prism Voice: a sustaining voice with FM, sample-rate crush and filter
   on the three colours.<br><br>
 
-  Hold Down at power-on to calibrate, and pick one of two sequences with the
-  switch. Two captures — white then black — set each channel's range and
-  straighten its response, an LDR being a power-law device whose raw reading
-  bunches up at the bright end. Five captures — red, green, blue, white,
-  black — additionally measure how much each gel leaks the other colours and
-  un-mix it, so blue reads as blue rather than as a grey lift on all three;
-  the card then reports how well the gels separate, one LED to five.
-  Calibration is saved and survives power-off.<br><br>
+  Hold Down at power-on to calibrate: five captures, one per tap. Show it
+  red, green, blue, white and black and it measures how much each gel leaks
+  the other colours and un-mixes them, so blue reads as blue rather than as a
+  grey lift on all three, then reports how well the gels separate, one LED to
+  five. Show it white for the first four taps instead and it calibrates level
+  alone — setting each channel's range and straightening its response, an LDR
+  being a power-law device whose raw reading bunches up at the bright end.
+  There is no mode to pick: white is the sum of the primaries, so the
+  captures themselves say which calibration was meant. It is saved to flash
+  and survives power-off.<br><br>
+
+  Two pages to open full-screen on whatever screen you are scanning, both in
+  tools/ and both on the web — the calibration targets
+  (https://uglifruit.github.io/WorkshopLightPen/tools/calibration-target.html)
+  and nine colour maps
+  (https://uglifruit.github.io/WorkshopLightPen/tools/colour-maps.html): the
+  red/green field the tape scrubber was designed around, a hue sweep that
+  plays as a rising scale, barcodes for the barcode reader, and saturated
+  fields for the drone.<br><br>
 
   Still in development: builds and passes its desktop DSP checks, not yet
   played on hardware.
