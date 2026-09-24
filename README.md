@@ -22,7 +22,7 @@ This works best when the LDRs read somewhere near 120k through their gels. If yo
 - **X knob:** sensitivity (0.25x to 4x of the calibrated range, unity at noon)
 - **Y knob:** smoothing, from light to about a third of a second
 - **Switch Up:** next mode (one mode per click)
-- **Switch Down (momentary):** the current mode's action
+- **Switch Down (momentary):** the current mode's action — and in the three modes that record (3, 4 and 7), a quick **tap** changes the sound or behaviour while a longer press records, so the one switch does both
 - **Main knob:** the current mode's parameter
 
 **LEDs.** The six LEDs are in two columns of three:
@@ -32,7 +32,7 @@ This works best when the LDRs read somewhere near 120k through their gels. If yo
 
 The meter shows what the modes actually act on, not the bare sensor: it's the reading after calibration, the X-knob sensitivity and the Y-knob smoothing. Dark is calibrated black, full brightness is calibrated white, and turning X up brightens the LEDs too. That makes it the quickest way to set the card up — if a colour sits pinned at full or stays dark as you move the wand, the modes are seeing the same thing, so back the sensitivity off or recalibrate.
 
-Two exceptions: during calibration the right column shows the *raw* readings instead, since there's no calibration to apply yet; and when you change a mode's option (chord, rotation, scale), that option's number blinks across the first few LEDs for a second.
+Two exceptions. During calibration the right column shows the *raw* readings instead, since there's no calibration to apply yet. And when you change one of a mode's options — a chord, a drum kit, a scrub behaviour, a scale — that option's number blinks across the first few LEDs for a second. In Modes 4 and 7 all six blink at the moment a recording actually starts, since a press only becomes a recording once it outlasts a tap.
 
 ## Calibration
 
