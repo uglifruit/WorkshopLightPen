@@ -21,7 +21,8 @@ committed at `UF2/lightpen.uf2`.
 
 `info.yaml` is `draft: false`, `Status: Released`, version 1.0.0. Own repo:
 `uglifruit/WorkshopLightPen`, tagged `v1.0.0`. Submitted to the community
-catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer`.
+catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer`
+(PR #421, from branch `add-card-109-lightpen` on the fork).
 Design plan of record: `~/.claude/plans/glistening-popping-avalanche.md`.
 
 The bench list further down is no longer a list of blockers — the card has
