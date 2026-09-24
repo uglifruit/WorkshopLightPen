@@ -11,17 +11,23 @@ LDRs in the tip under red, green and blue gels. It reads room light or scans
 printed colour (gradient maps, barcode stripes, rainbow strips) and turns it
 into CV and audio across eight modes.
 
-## Current status: v0.4.0, all eight modes written, NOT yet on hardware
+## Current status: v1.0.0, released, flashed and played
 
 Builds clean under `-Wall -Wextra -Wdouble-promotion -Wfloat-conversion` to
-`build/lightpen.uf2`: **5.5% flash, 80% RAM** (the RAM is almost entirely
-`gTape`, the 168KB take shared by Modes 4 and 7).
-`python tools/lpsim.py` passes all 126 checks. Nothing has been
-flashed or played yet: the bench unknowns below come first.
+`build/lightpen.uf2`: **5.78% flash, 81.13% RAM** (the RAM is almost entirely
+`gTape`, the 168KB take shared by Modes 4 and 7). The released binary is
+committed at `UF2/lightpen.uf2`.
+`python tools/lpsim.py` passes all 184 checks.
 
-`info.yaml` is `draft: true`, `Status: In development`. Own repo:
-`uglifruit/WorkshopLightPen`. Design plan of record:
-`~/.claude/plans/glistening-popping-avalanche.md`.
+`info.yaml` is `draft: false`, `Status: Released`, version 1.0.0. Own repo:
+`uglifruit/WorkshopLightPen`, tagged `v1.0.0`. Submitted to the community
+catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer`.
+Design plan of record: `~/.claude/plans/glistening-popping-avalanche.md`.
+
+The bench list further down is no longer a list of blockers — the card has
+been on hardware — but those are still the values that were set from the
+model rather than measured, so they are where to look first if a mode feels
+wrong on a different wand or a different set of gels.
 
 ## Fixed wiring (every mode)
 
@@ -289,7 +295,7 @@ pymupdf). Sheets 2/5 and 3/5 settle how the wand behaves:
   library then forces an unpatched Audio In 1 to exactly 0 instead of
   whatever the normalling gives it.
 
-## Bench unknowns (check these before trusting any mode)
+## Bench values set from the model, not measured (look here first)
 
 1. **LDR span under the gels.** White and black must differ by at least 64 LSB
    (~0.2V) per channel, and a small span reads noisily. Measure the gelled

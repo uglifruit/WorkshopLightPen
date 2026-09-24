@@ -2,7 +2,7 @@
 
 A program card for the [Music Thing Modular Workshop System Computer](https://github.com/TomWhitwell/Workshop_Computer) that turns an **RGB sensor wand** into a controller and a sound source. The wand is a whiteboard-marker body with three light-dependent resistors (LDRs) in the tip, under red, green and blue lighting gels. Wave it at the room, or scan printed colour with it (gradient maps, barcode stripes, rainbow strips), and the colour becomes CV, gates and audio.
 
-**Status: in development.** All eight modes build and pass the desktop DSP checks in `tools/`. None has been played on hardware yet.
+**Version 1.0.0.** All eight modes build and pass the desktop DSP checks in `tools/`. A ready-to-flash binary is in [UF2/lightpen.uf2](UF2/lightpen.uf2) — drag it onto the Computer in bootloader mode.
 
 ## Wiring the wand
 
