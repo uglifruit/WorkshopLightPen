@@ -14,12 +14,22 @@ void JogMode::OnEnter()
 
 void JogMode::OnDownPress()
 {
-	gTape.StartRecord();
+	// Not StartRecord() — see the same comment in tapescrub.cpp. Starting on
+	// the press would overwrite the front of the existing take every time
+	// someone tapped to change behaviour.
+	armed_ = true;
 }
 
-void JogMode::OnDownRelease(bool)
+void JogMode::OnDownRelease(int ticks)
 {
-	gTape.StopRecord();
+	armed_ = false;
+	if (ticks < kTapTicks)
+	{
+		act_ = static_cast<Act>((static_cast<int>(act_) + 1) % static_cast<int>(Act::kCount));
+		actChanged_ = true;
+		return;
+	}
+	if (gTape.Recording()) gTape.StopRecord();
 	idx_ = 0;
 	frac_ = 0;
 	rate_ = kQ16One;
@@ -27,18 +37,46 @@ void JogMode::OnDownRelease(bool)
 
 void JogMode::ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &out)
 {
+	if (armed_ && c.downHeld && c.downTicks == kTapTicks)
+	{
+		gTape.StartRecord();
+		out.ledFlash = 6;     // all six: the tape is rolling from here
+	}
+	if (actChanged_)
+	{
+		out.ledFlash = static_cast<uint8_t>(static_cast<int>(act_) + 1);
+		actChanged_ = false;
+	}
+
 	// Green either side of mid-grey, with a dead zone so a steady hand is
-	// exactly 1x. Main sets how much a full deflection is worth: +/-1x at the
-	// bottom of the knob (a nudge), +/-4x at the top (a shuttle).
+	// exactly at rest. Main sets how much a full deflection is worth: +/-1x at
+	// the bottom of the knob (a nudge), +/-4x at the top (a shuttle).
 	int32_t dev = f.ug - 32768;
 	if (dev > -kDeadZone && dev < kDeadZone) dev = 0;
 	else dev += (dev > 0) ? -kDeadZone : kDeadZone;
 	int32_t depthQ8 = 256 + ((c.main * 768) >> 12);
-	rateTarget_ = clamp_i32(kQ16One + ((dev * depthQ8) >> 7), -kMaxRate, kMaxRate);
 
 	// Blue is the platter's weight: shift 2 is a light hand on a 7", 13 is a
 	// heavy flywheel that takes a moment to answer.
 	inertia_ = static_cast<uint8_t>(2 + ((f.ub * 12) >> 16));
+
+	if (act_ == Act::Nudge)
+	{
+		rateTarget_ = clamp_i32(kQ16One + ((dev * depthQ8) >> 7), -kMaxRate, kMaxRate);
+	}
+	else if (act_ == Act::Platter)
+	{
+		// The same law without the motor: mid-grey is a standstill.
+		rateTarget_ = clamp_i32((dev * depthQ8) >> 7, -kMaxRate, kMaxRate);
+	}
+	else
+	{
+		// Covered or not, and the weight decides how long the ramp takes.
+		// Braking is two shifts quicker than spinning up.
+		bool covered = f.ug < kBrakeThresh;
+		rateTarget_ = covered ? 0 : kQ16One;
+		if (covered && inertia_ > 3) inertia_ = static_cast<uint8_t>(inertia_ - 2);
+	}
 
 	svf_.Set(f.ur, kJogRes);
 
@@ -85,7 +123,10 @@ void __not_in_flash_func(JogMode::AudioTick)(const SensorFrame &, const Inputs &
 		if (idx_ >= len)     { idx_ -= len; wrapped_ = true; }
 		else if (idx_ < 0)   { idx_ += len; wrapped_ = true; }
 
-		sig = gTape.Read(static_cast<uint32_t>(idx_), frac_);
+		// Below a sixteenth speed there is no pitch left, just a DC crawl and
+		// gross aliasing, so a stopped platter is properly silent.
+		int32_t mag = rate_ < 0 ? -rate_ : rate_;
+		sig = (mag < kMuteRate) ? 0 : gTape.Read(static_cast<uint32_t>(idx_), frac_);
 	}
 	else
 	{

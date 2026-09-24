@@ -12,16 +12,26 @@
 //
 //   Pulse Out 1   every element, black or white
 //   Pulse Out 2   only elements wider than the take's average: the wide bars
-//   CV Out 2      the scanned brightness
-//   Audio Out 1   the current element's width, average width = half scale
 //   Audio Out 2   high through black elements, low through white: the code
 //                 itself as a gate
+//
+// A TAP of Down (under kTapTicks) cycles the voice: off, kick and snare,
+// clicks, crackle, shaped noise. Holding Down is still the record gesture, so
+// the two do not collide — a readable swipe always lasts longer than a tap.
+//
+// With a voice running, Audio Out 1 plays it and CV Out 2 carries the element
+// WIDTH; with the voice off, Audio Out 1 carries width and CV Out 2 the
+// scanned brightness, as it always did. Width is the quantity the whole
+// element analysis exists to extract, so it keeps a jack either way; the
+// brightness replay is what gives way, and Audio Out 2's gate plus Pulse Out 1
+// still carry the code's structure.
 //
 // Main: playback speed, 1/8x to 8x, original speed in a dead zone at noon.
 // Keep Y (smoothing) low while scanning, or the bars blur into each other.
 
 #pragma once
 #include "engine.h"
+#include "percvoice.h"
 
 namespace lp {
 
@@ -31,7 +41,7 @@ public:
 	void ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &out) override;
 	void AudioTick(const SensorFrame &f, const Inputs &in, EngineOut &out) override;
 	void OnDownPress() override;
-	void OnDownRelease(bool afterHold) override;
+	void OnDownRelease(int ticks) override;
 
 	/// 2.73s at one sample per control tick (1.5kHz). Faster than the old
 	/// 375Hz: a hand swipe puts a lot of bars through in a second, and the
@@ -88,6 +98,13 @@ private:
 	int      trig_[2] = { 0, 0 };
 	int32_t  target_[3] = { 0, 0, 0 };   // brightness, width, black gate
 	int32_t  smooth_[3] = { 0, 0, 0 };
+
+	Perc     perc_;
+	Kit      kit_ = Kit::Off;
+	bool     kitChanged_ = false;
+	bool     hitPend_ = false;   // an element boundary to sound, this tick
+	bool     hitDark_ = false;
+	bool     curDark_ = false;
 };
 
 } // namespace lp

@@ -58,9 +58,11 @@ void HueOrganMode::OnEnter()
 	synced_ = false;
 }
 
-void HueOrganMode::OnDownRelease(bool afterHold)
+void HueOrganMode::OnDownRelease(int ticks)
 {
-	if (!afterHold) transpose_ = (transpose_ + 1) % 12;
+	// downTicks_ saturates at kHoldTicks, so this is exactly the old
+	// "did the hold fire" test.
+	if (ticks < kHoldTicks) transpose_ = (transpose_ + 1) % 12;
 }
 
 void HueOrganMode::OnDownHold()

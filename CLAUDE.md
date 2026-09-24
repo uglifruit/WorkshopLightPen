@@ -184,11 +184,11 @@ again, and keep the v1 read path.
 |---|---|---|---|---|
 | 1 | `modes/mirror` | gate threshold | hold = freeze CV | CV2/A1/A2 = R/G/B 0-5V; P1/P2 = R/B over threshold |
 | 2 | `modes/triad` | sine→tri→saw→square | tap = Maj/Min/Sus2/Sus4 | A1+A2 = drone; R/G/B = root/3rd/5th VCA; A In 1 = 1V/oct (0V = A2) |
-| 3 | `modes/barcode` | speed 1/8x..8x (1x at noon, dead zone) | hold = record, release = loop | luminance, cut into elements; P1 = every element, P2 = wide ones; CV2 = brightness, A1 = element width, A2 = black/white gate |
-| 4 | `modes/tapescrub` | LP→BP→HP walk | hold = record a take | A1+A2; A In 1 = source; G = head, R = cutoff, B = resonance |
+| 3 | `modes/barcode` | speed 1/8x..8x (1x at noon, dead zone) | hold = record; TAP = next kit | luminance, cut into elements; P1 = every element, P2 = wide ones; A2 = black/white gate; A1 = the voice (CV2 = width), or width (CV2 = brightness) with the voice off |
+| 4 | `modes/tapescrub` | LP→BP→HP walk | hold = record; TAP = Scrub/Slice/Sweep | A1+A2; A In 1 = source; G = head or slice or loop length, R = cutoff, B = resonance |
 | 5 | `modes/synesthesia` | sine→saw→square | tap = rotate R/G/B roles | A1+A2 voice; CV2 = envelope; A In 1 = 1V/oct (0V = C3); P In 1 = gate |
 | 6 | `modes/hueorgan` | scale (4 zones) | tap = transpose +1 (wraps), hold 1s = C | CV2 = note (calibrated); P1 = new note; P2 = colour seen; A1+A2 organ |
-| 7 | `modes/jog` | jog depth (nudge→shuttle) | hold = record a take | A1+A2; G = speed, B = platter weight, R = cutoff; CV2 = position; P1 = loop start; P2 = reversing |
+| 7 | `modes/jog` | jog depth (nudge→shuttle) | hold = record; TAP = Nudge/Platter/Brake | A1+A2; G = speed, B = platter weight, R = cutoff; CV2 = position; P1 = loop start; P2 = reversing |
 | 8 | `modes/prism` | sine→tri→square | tap = rotate R/G/B roles | A1+A2 voice; CV2 = envelope; R = FM, G = crush, B = cutoff; sustains on the gate |
 
 Design decisions worth knowing before changing things:
@@ -216,12 +216,36 @@ Design decisions worth knowing before changing things:
   hold at least two elements, so a stray tap keeps the playing loop.
 - **Mode 4's filter is a continuous crossfade** (0-20% LP, 40-60% BP, 80-100%
   HP), not hard thirds. The user confirmed this.
+- **A TAP of Down cycles an option in Modes 3, 4 and 7; a longer press is
+  still the record gesture.** The threshold is `kTapTicks` (256 ticks, 171ms,
+  in fastmath.h): above the slowest deliberate tap, below the shortest swipe
+  the LDRs can physically resolve. `OnDownRelease` now carries the press
+  duration rather than a bool, and `Ctrl` carries the live count.
+  **Modes 4 and 7 must NOT call `StartRecord()` on the press** — it zeroes the
+  write head, so it would overwrite the front of the existing take every time
+  anyone tapped. They arm on the press and start the tape from `ControlTick`
+  when the count reaches `kTapTicks`, which costs the first 171ms of a take
+  and makes a tap provably harmless. `Tape::kMinLen` dropped to 256 because
+  the "discard accidental taps" guard it existed for is now unreachable.
+  Mode 3 needs none of that: it records into the spare buffer and swaps.
 - **Modes 4 and 7 share one take** (`tape.h`, `gTape`, 168KB at file scope).
   Recording is a gesture in both: hold Down and the take is as long as the
   hold, capped at `Tape::kMaxLen` (1.75s — the most that fits with ~54KB to
   spare). A take under 50ms is discarded and the previous one kept, though
   its first few ms have been overwritten by then. Mode 4 places the head
   absolutely from Green; Mode 7 lets the loop run and Green sets its speed.
+- **Mode 3's voice** (`percvoice.h`, header-only so it inlines into the
+  RAM-resident `AudioTick`) is two drum voices permanently assigned to the two
+  edge directions — bright→dark owns one, dark→bright the other — so a kick
+  and a snare always ring together with no stealing. Each voice has separate
+  tone and noise envelopes, which is what makes one kit a kick (long body,
+  2ms click) and another a snare (short body, long hiss) from the same
+  arithmetic. Envelopes decay by `(env >> shift) + 1`; the **+1 is
+  load-bearing**, as a plain shift stalls short and leaves DC on the output.
+  The pitch sweep falls exponentially toward its floor, which is what makes a
+  kick a kick rather than a click followed by a tone. One shared `Svf` serves
+  every kit through its three taps. Five positions: Off, Kick+Snare, Clicks,
+  Crackle, Shaped Noise — Off restores the mode exactly as it was.
 - **Mode 8 is Mode 5's architecture on different destinations** (FM, crush,
   cutoff) with a SUSTAINING envelope rather than a percussive one, so the
   two voices do not just sound like knob swaps of each other.

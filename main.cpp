@@ -104,9 +104,9 @@ private:
 		Engine *e = engines_[mode_];
 		if (ev & Controls::kEvDownPress)   e->OnDownPress();
 		if (ev & Controls::kEvDownHold)    e->OnDownHold();
-		if (ev & Controls::kEvDownRelease) e->OnDownRelease(controls_.ReleaseWasHold());
+		if (ev & Controls::kEvDownRelease) e->OnDownRelease(controls_.PressTicks());
 
-		Ctrl c{ KnobVal(Main), controls_.DownHeld() };
+		Ctrl c{ KnobVal(Main), controls_.DownHeld(), controls_.PressTicks() };
 		e->ControlTick(frame_, c, out_);
 
 		if (out_.ledFlash)

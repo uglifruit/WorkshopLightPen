@@ -20,7 +20,6 @@ public:
 	/// hysteresis, so contact bounce near a threshold can read as several
 	/// transitions; without this, one click could advance two modes.
 	static constexpr int kDebounceTicks = kCtrlRate / 50;   // 20ms
-	static constexpr int kHoldTicks     = kCtrlRate;        // 1s
 
 	static constexpr uint8_t kEvModeNext    = 1;
 	static constexpr uint8_t kEvDownPress   = 2;
@@ -76,8 +75,11 @@ public:
 
 	bool DownHeld() const { return stable_ == Sw::Down && !ignoreDown_; }
 
-	/// Valid when handling kEvDownRelease: did this press reach kHoldTicks?
-	bool ReleaseWasHold() const { return holdFired_; }
+	/// How long Down has been held, in control ticks, saturating at kHoldTicks
+	/// (the counter stops once the hold has fired). Both the press and the
+	/// release are reported after the same 20ms of debounce, so the two lags
+	/// cancel and this measures the physical press to within a tick.
+	int PressTicks() const { return downTicks_; }
 
 private:
 	Sw   stable_     = Sw::Middle;

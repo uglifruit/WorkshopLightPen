@@ -67,21 +67,41 @@ Two things to know: calibrate against the screen or print you'll actually use, b
 
 - **Pulse Out 1** — every element, black or white
 - **Pulse Out 2** — only elements wider than that code's average, so the wide bars accent
-- **CV Out 2** — the scanned brightness
-- **Audio Out 1** — the current element's width, with the average width at half scale
+- **Audio Out 1** — the voice (see below), or the element's width when the voice is off
 - **Audio Out 2** — high through black elements and low through white: the code itself as a gate
+- **CV Out 2** — the element's width, or the scanned brightness when the voice is off
 
-*Main:* playback speed, 1/8x to 8x, with original speed in a dead zone at noon.
+**It plays drums.** A quick *tap* of Down cycles the voice, and a bar passing under the wand strikes it — going dark hits one sound, coming back to light hits the other:
+
+- **Off** — no voice; the outputs are as they were.
+- **Kick & snare** — bright to dark is the kick, dark to bright the snare. Wide bars hit lower and longer.
+- **Clicks** — both directions tick, dull one way and bright the other, so the code reads as a pattern of taps.
+- **Crackle** — a thump at each boundary over a bed of surface noise that gets busier through the black runs.
+- **Shaped noise** — no hits: a continuous band of noise whose pitch follows the scanned brightness and whose sharpness follows bar width.
+
+*Main:* playback speed, 1/8x to 8x, with original speed in a dead zone at noon. *Down:* tap to change the voice, hold to record.
 
 Coloured stripes still work, read by their lightness. Two practical notes: keep **Y (smoothing) low** while scanning or the bars blur together, and remember LDRs respond in milliseconds rather than microseconds — a supermarket barcode swiped at speed is beyond them, but a code printed or photocopied up large reads well.
 
-**4. Tape Scrubber.** Hold Down and Audio In 1 records for exactly as long as you hold it, up to 1.75 seconds — the length of the hold is the length of the loop. Release, and the green reading positions the playhead anywhere in that take, so moving the wand scratches the audio like tape. Red sets the filter cutoff and blue its resonance. With a 2D colour map (green across, red up), the page works like a KAOSS pad. *Main:* filter, low-pass → band-pass → high-pass.
+**4. Tape Scrubber.** Hold Down and Audio In 1 records for exactly as long as you hold it, up to 1.75 seconds — the length of the hold is the length of the loop. Red sets the filter cutoff and blue its resonance. With a 2D colour map (green across, red up), the page works like a KAOSS pad. A quick *tap* of Down changes what green does with the take:
+
+- **Scrub** — green places the playhead anywhere in the take, so moving the wand scratches it like tape. Silent when your hand is still.
+- **Slice** — the take is cut into sixteen, green picks one, and that slice repeats. Beat repeat: it plays whether or not you move.
+- **Sweep** — the take runs from its start and green sets the loop *length*, from the whole thing down to a sixty-fourth. Dragging down a gradient shrinks a phrase into a stutter into a pitched buzz.
+
+*Main:* filter, low-pass → band-pass → high-pass. *Down:* tap to change behaviour, hold to record.
 
 **5. Synesthesia Voice.** A complete synth voice: pitch from Audio In 1 (1V/oct, 0V = C3), gate from Pulse In 1. By default red is filter cutoff, green is wavefolder depth and blue is decay length. The envelope also comes out of CV Out 2. *Main:* waveshape, sine → saw → square. *Down:* rotate which colour controls what.
 
 **6. Colour Organ.** The colour's hue picks a note: two octaves of the chosen scale spread around the colour wheel, so scanning a rainbow plays a scale. CV Out 2 carries the note (calibrated 1V/oct) and Pulse Out 1 fires on each new note. Pulse Out 2 is high while a colour is detected, and the audio outs play a simple organ tone. *Main:* scale (chromatic / major / minor / pentatonic). *Down:* tap to transpose up a semitone; hold for a second to go back to C.
 
-**7. Jog Wheel.** The same recording as Mode 4 — made the same way, by holding Down — but played the other way round. The loop runs by itself at normal speed and the wand sets its *speed*, like a hand resting on a turntable: mid-grey leaves it alone, brighter drives it faster, darker drags it down through a standstill and into reverse. Blue is the platter's weight, so a bright blue reading gives you a heavy flywheel that takes a moment to answer. Red is a low-pass filter. CV Out 2 follows the play position, Pulse Out 1 fires at the loop start, and Pulse Out 2 is high while it runs backwards. *Main:* how hard the wand pushes, from a gentle nudge to a full shuttle.
+**7. Jog Wheel.** The same recording as Mode 4 — made the same way, by holding Down — but played the other way round: the loop runs and the wand sets its *speed*. Blue is the platter's weight, so a bright blue reading gives you a heavy flywheel that takes a moment to answer. Red is a low-pass filter. CV Out 2 follows the play position, Pulse Out 1 fires at the loop start, and Pulse Out 2 is high while it runs backwards. A quick *tap* of Down changes the feel:
+
+- **Nudge** — rest is normal speed, and the wand bends it either way, through a standstill and into reverse if you push far enough.
+- **Platter** — no motor at all. Mid-grey is a true standstill and your hand drives it, like a palm on vinyl.
+- **Brake** — rest is normal speed, but covering the sensor ramps it to a halt and uncovering spins it back up. Stopping is quicker than starting, so it behaves like a motor rather than a fader.
+
+*Main:* how hard the wand pushes, from a gentle nudge to a full shuttle. *Down:* tap to change behaviour, hold to record.
 
 **8. Prism Voice.** Mode 5's voice wired to a different set of controls, and a different character: it *sustains* while the gate is high instead of plucking. Red is FM depth from a second oscillator an octave up, green crushes the sample rate from clean down to a sixty-fourth, and blue is the filter cutoff. Same pitch and gate inputs as Mode 5, and the envelope again comes out of CV Out 2. *Main:* waveshape, sine → triangle → square. *Down:* rotate which colour controls what.
 

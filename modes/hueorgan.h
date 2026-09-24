@@ -20,7 +20,7 @@ public:
 	void OnEnter() override;
 	void ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &out) override;
 	void AudioTick(const SensorFrame &f, const Inputs &in, EngineOut &out) override;
-	void OnDownRelease(bool afterHold) override;
+	void OnDownRelease(int ticks) override;
 	void OnDownHold() override;
 
 	/// Hue of unipolar Q16 r/g/b as Q16 around the wheel (0 = red), or -1

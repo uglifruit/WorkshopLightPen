@@ -3,7 +3,7 @@ Name: LIGHTPEN
 short-description: An RGB light-sensor wand as an eight-mode controller and sound source
 Language: C++ (ComputerCard)
 Creator: Andy Jenkinson (uglifruit)
-Version: "0.4.0"
+Version: "0.5.0"
 Status: In development
 License: CC-BY-4.0
 repository: https://github.com/uglifruit/WorkshopLightPen
@@ -17,7 +17,7 @@ contact:
 
 uf2:
   - path: UF2/lightpen.uf2
-    name: LIGHTPEN 0.4.0
+    name: LIGHTPEN 0.5.0
 
 tags:
   - controller
@@ -33,7 +33,9 @@ summary: |
   printed colour, and the colour becomes CV, gates and audio.<br><br>
 
   X sets sensitivity and Y smoothing in every mode. Switch Up steps through
-  eight modes; Down is each mode's action.<br><br>
+  eight modes; Down is each mode's action — and in the three modes that
+  record, a quick tap of Down cycles the sound or behaviour while a longer
+  press still records.<br><br>
 
   The LEDs are two columns of three: the left (0, 2, 4) counts the mode as a
   three-bit number, and the right is a live meter of red (LED 1), green (3)
@@ -46,17 +48,21 @@ summary: |
   2 Triad Drone: red, green and blue set the levels of a chord's three notes.
   3 Barcode Reader: swipe across a black-and-white code while holding Down,
   and its bars loop as triggers — every element on one pulse out, the wide
-  ones on the other, with bar width and the black/white gate as CV.
+  ones on the other, with the black/white gate as CV. It also plays drums: a
+  bar going dark hits a kick and coming back to light hits a snare, or
+  clicks, crackle or shaped noise, tapped through with the switch.
   4 Tape Scrubber: hold Down to record Audio In 1 for as long as you hold it,
   then scrub through the take by moving the wand across a colour map, with a
-  colour-controlled filter.
+  colour-controlled filter. Tap Down to switch between scrubbing, repeating
+  one of sixteen slices, and sweeping the loop length down to a buzz.
   5 Synesthesia Voice: a 1V/oct voice whose filter, wavefolder and decay
   follow the colour.
   6 Colour Organ: hue picks a note in a scale, as calibrated pitch CV,
   triggers and an organ tone.
   7 Jog Wheel: the same take runs as a loop and the wand sets its speed,
   from a nudge to a full shuttle into reverse, against a flywheel whose
-  weight the colour controls.
+  weight the colour controls. Tap Down for a motorless platter your hand
+  drives entirely, or a brake that stops when you cover the sensor.
   8 Prism Voice: a sustaining voice with FM, sample-rate crush and filter
   on the three colours.<br><br>
 

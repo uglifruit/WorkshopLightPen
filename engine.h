@@ -22,8 +22,9 @@ struct Inputs
 
 struct Ctrl
 {
-	int32_t main;       // Main knob, 0..4095
-	bool    downHeld;   // debounced
+	int32_t main;        // Main knob, 0..4095
+	bool    downHeld;    // debounced
+	int     downTicks;   // how long it has been held, saturating at kHoldTicks
 };
 
 /// What a mode wants on the jacks. main.cpp owns the writes, so no mode can
@@ -48,8 +49,9 @@ public:
 	virtual void AudioTick(const SensorFrame &f, const Inputs &in, EngineOut &out) = 0;
 
 	virtual void OnDownPress() {}
-	/// afterHold: the press lasted long enough to have fired OnDownHold.
-	virtual void OnDownRelease(bool afterHold) { (void)afterHold; }
+	/// How long the press lasted, in control ticks, saturating at kHoldTicks.
+	/// Under kTapTicks it was a tap; at kHoldTicks it was a hold.
+	virtual void OnDownRelease(int ticks) { (void)ticks; }
 	virtual void OnDownHold() {}
 };
 

@@ -36,10 +36,21 @@ void BarcodeMode::OnDownPress()
 	recMax_ = 0;
 }
 
-void BarcodeMode::OnDownRelease(bool)
+void BarcodeMode::OnDownRelease(int ticks)
 {
 	if (!recording_) return;
 	recording_ = false;
+
+	if (ticks < kTapTicks)
+	{
+		// A tap, not a swipe. The take went into the spare buffer, so dropping
+		// it leaves the playing loop untouched.
+		kit_ = static_cast<Kit>((static_cast<int>(kit_) + 1) % static_cast<int>(Kit::kCount));
+		perc_.SetKit(kit_);
+		kitChanged_ = true;
+		return;
+	}
+
 	if (recLen_ < kMinLen) return;         // a slip: keep whatever was playing
 	StartAnalysis();
 }
@@ -139,11 +150,15 @@ void BarcodeMode::ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &ou
 		AnalyseChunk();
 	}
 
-	if (recording_ || !hasTake_)
+	// Keep playing until the press is definitely a record, so a tap to change
+	// the voice does not put a 171ms hole in the outputs.
+	if ((recording_ && recLen_ >= static_cast<uint32_t>(kTapTicks)) || !hasTake_)
 	{
 		// Mirror what the wand sees, so a swipe can be aimed before recording.
+		// Both CV-carrying channels show brightness here: with a voice running
+		// CV Out 2 reads target_[1], and while aiming there is no width to show.
 		target_[0] = luma;
-		target_[1] = 0;
+		target_[1] = luma;
 		target_[2] = 0;
 		trig_[0] = trig_[1] = 0;
 	}
@@ -160,6 +175,8 @@ void BarcodeMode::ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &ou
 			elemIdx_ = 0;
 			trig_[0] = kTrigTicks;
 			if (elems_[take][0].width > meanWidth_[take]) trig_[1] = kTrigTicks;
+			hitPend_ = true;
+			hitDark_ = elems_[take][0].dark != 0;
 		}
 
 		uint32_t i = pos_ >> 16;
@@ -170,6 +187,10 @@ void BarcodeMode::ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &ou
 			elemIdx_++;
 			trig_[0] = kTrigTicks;
 			if (elems_[take][elemIdx_].width > meanWidth_[take]) trig_[1] = kTrigTicks;
+			// One hit per tick, last edge wins: at 8x several narrow bars can
+			// pass in one tick, and three hits 600us apart is a buzz, not a beat.
+			hitPend_ = true;
+			hitDark_ = elems_[take][elemIdx_].dark != 0;
 		}
 
 		const Elem &e = elems_[take][elemIdx_];
@@ -181,6 +202,20 @@ void BarcodeMode::ControlTick(const SensorFrame &f, const Ctrl &c, EngineOut &ou
 		// Average width reads half scale, so wide and narrow sit either side.
 		target_[1] = clamp_i32((e.width * 32768) / meanWidth_[take], 0, 65535);
 		target_[2] = e.dark ? 65535 : 0;
+		curDark_ = e.dark != 0;
+	}
+
+	if (hitPend_)
+	{
+		perc_.Trigger(hitDark_, target_[1]);
+		hitPend_ = false;
+	}
+	perc_.SetTone(target_[0], target_[1], curDark_);
+
+	if (kitChanged_)
+	{
+		out.ledFlash = static_cast<uint8_t>(static_cast<int>(kit_) + 1);
+		kitChanged_ = false;
 	}
 
 	out.pulse1 = trig_[0] > 0;
@@ -196,8 +231,17 @@ void __not_in_flash_func(BarcodeMode::AudioTick)(const SensorFrame &, const Inpu
 	smooth_[0] = slew(smooth_[0], target_[0], 4);
 	smooth_[1] = slew(smooth_[1], target_[1], 4);
 	smooth_[2] = slew(smooth_[2], target_[2], 2);
-	out.cv2    = q16_to_cv5v(smooth_[0]);
-	out.audio1 = q16_to_audio5v(smooth_[1]);
+
+	if (kit_ == Kit::Off)
+	{
+		out.cv2    = q16_to_cv5v(smooth_[0]);    // the scanned brightness
+		out.audio1 = q16_to_audio5v(smooth_[1]); // element width
+	}
+	else
+	{
+		out.cv2    = q16_to_cv5v(smooth_[1]);    // width moves here...
+		out.audio1 = clamp12(perc_.Render());    // ...so the voice can have this
+	}
 	out.audio2 = q16_to_audio5v(smooth_[2]);
 }
 

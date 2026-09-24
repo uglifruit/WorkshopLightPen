@@ -1606,6 +1606,416 @@ def check_real_maps():
           max(lumas) - min(lumas) > 0.5, f"level span {max(lumas)-min(lumas):.2f}")
 
 
+# --- the tap gesture, the voice, and the behaviour cycles -------------------------
+
+CTRL_RATE = 1500
+TAP_TICKS, HOLD_TICKS = 256, CTRL_RATE
+DEBOUNCE = 30
+
+
+def hz_to_inc(hz):
+    return (hz << 32) // 48000
+
+
+def press_ticks(duration_ticks, rnd, bounce=True):
+    """Drive Controls with a bouncy press of a known length and report what
+    PressTicks() says at the release."""
+    stable, cand, count = 1, 1, DEBOUNCE      # Middle
+    down_ticks, hold_fired, reported = 0, False, None
+    seq = []
+    if bounce:
+        seq += [rnd.choice((0, 1)) for _ in range(rnd.randint(2, 9))]
+    seq += [0] * duration_ticks
+    if bounce:
+        seq += [rnd.choice((0, 1)) for _ in range(rnd.randint(2, 9))]
+    seq += [1] * (HOLD_TICKS + 200)
+    for raw in seq:
+        if raw != cand:
+            cand, count = raw, 0
+        elif count < DEBOUNCE:
+            count += 1
+            if count == DEBOUNCE and cand != stable:
+                prev, stable = stable, cand
+                if prev == 0 and reported is None:
+                    reported = down_ticks
+                if stable == 0:
+                    down_ticks, hold_fired = 0, False
+        held = stable == 0
+        if held and not hold_fired:
+            down_ticks += 1
+            if down_ticks >= HOLD_TICKS:
+                hold_fired = True
+    return reported, hold_fired
+
+
+def tape_writes(duration_ticks):
+    """Modes 4 and 7: how many samples reach the tape for a press of this
+    length, now that recording starts at the threshold rather than the press."""
+    if duration_ticks < TAP_TICKS:
+        return 0
+    return (duration_ticks - TAP_TICKS) * 32      # 32 samples per control tick
+
+
+def check_gesture():
+    rnd = random.Random(23)
+    # Clean press: the entry and exit debounce lags must cancel exactly. This
+    # is the assumption the whole threshold rests on.
+    worst = max(abs(press_ticks(round(ms * CTRL_RATE / 1000), rnd, bounce=False)[0]
+                    - round(ms * CTRL_RATE / 1000))
+                for ms in range(40, 900, 7))
+    check("a clean press is measured exactly", worst == 0, f"worst error {worst} ticks")
+    # With contact bounce the reading runs slightly long, because a bouncing
+    # contact really is closed for part of the bounce. A few ms either way
+    # cannot reach either threshold from the middle of its band.
+    worst = max(abs(press_ticks(round(ms * CTRL_RATE / 1000), rnd)[0]
+                    - round(ms * CTRL_RATE / 1000))
+                for ms in range(40, 900, 7))
+    check("contact bounce moves it by under 10ms", worst <= 15, f"worst error {worst} ticks")
+
+    # Nothing may classify both ways.
+    taps = [round(ms * CTRL_RATE / 1000) for ms in range(20, 170, 3)]
+    recs = [round(ms * CTRL_RATE / 1000) for ms in range(172, 900, 7)]
+    ok = all(press_ticks(t, rnd)[0] < TAP_TICKS for t in taps)
+    ok &= all(press_ticks(t, rnd)[0] >= TAP_TICKS for t in recs)
+    check("every press under 171ms is a tap, every one over it is a record", ok)
+
+    # The saturation that makes Mode 6's migration behaviour-preserving.
+    equiv = True
+    for ms in (50, 200, 500, 999, 1000, 1200, 3000):
+        ticks = round(ms * CTRL_RATE / 1000)
+        got, hold = press_ticks(ticks, rnd)
+        equiv &= got <= HOLD_TICKS and ((got >= HOLD_TICKS) == hold)
+    check("press ticks saturate at the hold, so >= kHoldTicks is the old hold flag", equiv)
+
+    # The claim the deferred record exists to make.
+    damaged = max(tape_writes(t) for t in range(0, TAP_TICKS))
+    check("a tap writes nothing at all to the tape", damaged == 0)
+    window = [t for t in range(TAP_TICKS, TAP_TICKS + 40) if 0 < tape_writes(t) < 256]
+    check("only a 5ms window of presses can touch the old take, and then by <=256 samples",
+          len(window) <= 8 and all(tape_writes(t) < 256 for t in window),
+          f"{len(window)} tick-lengths, at most {max(tape_writes(t) for t in window)} samples")
+    check("a real take records exactly what it held for, less the threshold",
+          tape_writes(round(1.0 * CTRL_RATE)) == (CTRL_RATE - TAP_TICKS) * 32)
+
+    # Cycling arithmetic.
+    for n, name in ((5, "kits"), (3, "behaviours")):
+        pos = 0
+        for k in range(1, 40):
+            pos = (pos + 1) % n
+            if pos != k % n:
+                break
+        check(f"{n} {name} cycle in order and wrap", pos == 39 % n)
+
+
+# --- percvoice.h ------------------------------------------------------------------
+
+KITS = {
+    "kicksnare": {
+        "dark":  dict(inc0=hz_to_inc(110), floor=hz_to_inc(50), inc2=0, sweep=9,
+                      env=11, nenv=4, mix=20, wave="sine", tap="raw", gain=140),
+        "light": dict(inc0=hz_to_inc(230), floor=hz_to_inc(185), inc2=hz_to_inc(269),
+                      sweep=8, env=9, nenv=10, mix=170, wave="tri", tap="bp", gain=110),
+        "cut": 45003, "res": 20000,
+    },
+    "clicks": {
+        "dark":  dict(inc0=hz_to_inc(700), floor=hz_to_inc(700), inc2=0, sweep=8,
+                      env=6, nenv=4, mix=110, wave="sine", tap="lp", gain=128),
+        "light": dict(inc0=hz_to_inc(2100), floor=hz_to_inc(2100), inc2=0, sweep=8,
+                      env=5, nenv=3, mix=150, wave="sine", tap="hp", gain=128),
+        "cut": 45003, "res": 52000,
+    },
+}
+
+
+class Voice:
+    """Mirror of PercVoice."""
+
+    def __init__(self):
+        self.env = self.nenv = 0
+        self.phase = self.phase2 = 0
+        self.inc = self.inc2 = self.floor = 0
+        self.diff = 0
+        self.sweep = self.envs = self.nenvs = 8
+        self.mix = 0
+        self.wave = "sine"
+        self.tap = "raw"
+        self.gain = 128
+
+    def strike(self, s, floor_inc=None, env_shift=None):
+        self.inc = s["inc0"]
+        self.floor = floor_inc if floor_inc is not None else s["floor"]
+        self.inc2 = s["inc2"]
+        self.diff = max(s["inc0"] - self.floor, 0)
+        self.sweep, self.envs = s["sweep"], env_shift if env_shift is not None else s["env"]
+        self.nenvs, self.mix = s["nenv"], s["mix"]
+        self.wave, self.tap, self.gain = s["wave"], s["tap"], s["gain"]
+        self.env = self.nenv = 1 << 24
+
+    def idle(self):
+        return self.env <= 0 and self.nenv <= 0
+
+    def render(self, raw, svf):
+        if self.idle():
+            return 0
+        body = 0
+        if self.env > 0:
+            self.phase = (self.phase + self.inc) & 0xFFFFFFFF
+            body = wave(self.wave, self.phase) >> 4
+            if self.inc2:
+                self.phase2 = (self.phase2 + self.inc2) & 0xFFFFFFFF
+                body = (body + (wave(self.wave, self.phase2) >> 4)) >> 1
+            body = i32(body * (self.env >> 9)) >> 15
+            self.env -= (self.env >> self.envs) + 1
+            if self.env < 0:
+                self.env = 0
+            if self.diff > 0:
+                self.diff -= (self.diff >> self.sweep) + 1
+                if self.diff < 0:
+                    self.diff = 0
+                self.inc = self.floor + self.diff
+        noise = 0
+        if self.nenv > 0:
+            src = {"raw": raw, "lp": svf.lp, "bp": svf.bp, "hp": svf.hp}[self.tap]
+            noise = i32(src * (self.nenv >> 9)) >> 15
+            self.nenv -= (self.nenv >> self.nenvs) + 1
+            if self.nenv < 0:
+                self.nenv = 0
+        s = i32(body * (256 - self.mix) + noise * self.mix) >> 8
+        return i32(s * self.gain) >> 8
+
+
+def render_hit(kit, direction, samples=24000, seed=0x1B3F5D79):
+    k = KITS[kit]
+    v = Voice()
+    v.strike(k[direction])
+    svf = Svf()
+    svf.set(k["cut"], k["res"])
+    rng = [seed]
+
+    def rand_audio():
+        s = rng[0]
+        s ^= (s << 13) & 0xFFFFFFFF
+        s ^= s >> 17
+        s ^= (s << 5) & 0xFFFFFFFF
+        rng[0] = s
+        return (s >> 20) - 2048
+
+    out = []
+    for _ in range(samples):
+        raw = rand_audio()
+        svf.process(raw)
+        out.append(v.render(raw, svf))
+    return out, v
+
+
+def band_energy(sig, lo, hi, step=25):
+    """Energy in a band, by direct evaluation — no numpy here."""
+    total = 0.0
+    n = min(len(sig), 4096)
+    for f in range(lo, hi, step):
+        w = 2 * math.pi * f / 48000
+        re = sum(sig[i] * math.cos(w * i) for i in range(n))
+        im = sum(sig[i] * math.sin(w * i) for i in range(n))
+        total += re * re + im * im
+    return total
+
+
+def check_voice():
+    # Envelopes must REACH zero. A plain shift stalls and leaves DC on the out.
+    for shift in range(4, 15):
+        env, n = 1 << 24, 0
+        while env > 0 and n < 4_000_000:
+            env -= (env >> shift) + 1
+            n += 1
+        check(f"envelope shift {shift} decays to exactly zero", env == 0 and n < 4_000_000,
+              f"{n} samples ({n/48000*1000:.0f}ms)") if shift in (4, 9, 14) else None
+    stalled = 1 << 24
+    for _ in range(2_000_000):
+        step = stalled >> 9
+        if step == 0:
+            break
+        stalled -= step
+    check("without the +1 guard it would stall short, which is why the guard is there",
+          stalled > 0, f"stalls at {stalled}")
+
+    # No int32 overflow anywhere in the voice, both kits, both directions.
+    overflow = False
+    try:
+        for kit in KITS:
+            for d in ("dark", "light"):
+                render_hit(kit, d, samples=6000)
+    except OverflowError:
+        overflow = True
+    check("no int32 overflow rendering any hit", not overflow)
+
+    # A kick is low, a snare is noisy.
+    kick, kv = render_hit("kicksnare", "dark")
+    snare, _ = render_hit("kicksnare", "light")
+    low = band_energy(kick, 25, 200)
+    high = band_energy(kick, 200, 6000)
+    check("the kick is actually low", low > 4 * high,
+          f"{100*low/(low+high):.0f}% of its energy below 200Hz")
+    s_low = band_energy(snare, 25, 1000)
+    s_high = band_energy(snare, 1000, 8000)
+    check("the snare is actually noisy and bright", s_high > 0.4 * (s_low + s_high),
+          f"{100*s_high/(s_low+s_high):.0f}% of its energy above 1kHz")
+
+    zc = lambda s: sum(1 for i in range(len(s) - 1) if (s[i] < 0) != (s[i + 1] < 0))
+    check("the snare crosses zero far more often than the kick",
+          zc(snare[:4000]) > 8 * max(zc(kick[:4000]), 1),
+          f"snare {zc(snare[:4000])} vs kick {zc(kick[:4000])}")
+
+    # The pitch sweep must land exactly on the floor.
+    check("the kick's pitch sweep reaches its floor exactly",
+          kv.inc == kv.floor and kv.diff == 0,
+          f"{kv.inc*48000/2**32:.1f}Hz")
+
+    # Clicks are short.
+    for d in ("dark", "light"):
+        sig, _ = render_hit("clicks", d, samples=4800)
+        peak = max(abs(v) for v in sig)
+        tail = max(abs(v) for v in sig[720:])       # after 15ms
+        check(f"the {d}-edge click is over within 15ms", tail < peak / 100,
+              f"peak {peak}, tail {tail}")
+
+    # They ring together without clipping.
+    k = KITS["kicksnare"]
+    a, b = Voice(), Voice()
+    svf = Svf()
+    svf.set(k["cut"], k["res"])
+    a.strike(k["dark"])
+    rng = [12345]
+    worst = 0
+    for i in range(24000):
+        if i == 960:                                 # snare 20ms later
+            b.strike(k["light"])
+        s = a.render(0, svf) + b.render(0, svf)
+        worst = max(worst, abs(s))
+    check("a kick and a snare ring together without clipping",
+          worst <= 2047, f"peak {worst}")
+
+
+# --- modes/tapescrub.cpp and modes/jog.cpp ----------------------------------------
+
+def slice_index(ug, current, slices=16):
+    band = 65536 // slices
+    lo = current * band - band // 4
+    hi = (current + 1) * band + band // 4
+    if lo <= ug < hi:
+        return current
+    return clamp(ug // band, 0, slices - 1)
+
+
+def check_behaviours():
+    # Slices land on real boundaries, for every take length.
+    ok = True
+    for length in (256, 2400, 40000, 84000):
+        slice_len = max(length // 16, 2)
+        for ug in range(0, 65536, 37):
+            s = slice_index(ug, 0)
+            start = s * slice_len
+            ok &= 0 <= s < 16 and start + slice_len <= length + slice_len
+            ok &= start < length
+    check("every slice starts on a real boundary inside the take", ok)
+
+    # Hysteresis and dwell: a wobbling hand must not machine-gun.
+    rnd = random.Random(31)
+    cur, pending, dwell, changes = 0, -1, 0, 0
+    for i in range(6000):
+        ug = clamp(int(i * 65535 / 6000) + rnd.randint(-1300, 1300), 0, 65535)
+        cand = slice_index(ug, cur)
+        if cand == cur:
+            pending, dwell = -1, 0
+        elif cand != pending:
+            pending, dwell = cand, 0
+        else:
+            dwell += 1
+            if dwell >= 45:
+                cur, pending, dwell = cand, -1, 0
+                changes += 1
+    check("a noisy sweep across the slices changes slice at most 16 times",
+          changes <= 16, f"{changes} changes")
+
+    # Sweep: loop length is monotonic in green and never leaves the take.
+    length = 40000
+    ends = []
+    for ug in range(0, 65536, 257):
+        oct_q12 = -(((65535 - ug) * 6 * 4096) >> 16)
+        ends.append(clamp(pow2_scale(length, oct_q12), 256, length))
+    check("sweep's loop length is monotonic and stays inside the take",
+          all(ends[i] <= ends[i + 1] for i in range(len(ends) - 1))
+          and min(ends) >= 256 and max(ends) <= length,
+          f"{min(ends)} .. {max(ends)} samples")
+
+    # The crossfade spreads a worst-case discontinuity instead of stepping it.
+    steps = []
+    prev = -2048
+    for f in range(128, 0, -1):
+        v = -2048 + (((2047 - -2048) * (128 - f)) >> 7)
+        steps.append(abs(v - prev))
+        prev = v
+    check("a jump between opposite rails is spread, not stepped",
+          max(steps) <= 64, f"largest step {max(steps)} LSB")
+
+    # Jog rate laws.
+    def rate(ug, main, act):
+        dev = ug - 32768
+        if -2048 < dev < 2048:
+            dev = 0
+        else:
+            dev += -2048 if dev > 0 else 2048
+        depth = 256 + ((main * 768) >> 12)
+        if act == "nudge":
+            return clamp(65536 + ((dev * depth) >> 7), -4 * 65536, 4 * 65536)
+        if act == "platter":
+            return clamp((dev * depth) >> 7, -4 * 65536, 4 * 65536)
+        return 0 if ug < 12000 else 65536
+
+    check("platter is exactly stopped across the dead zone",
+          all(rate(u, 2048, "platter") == 0 for u in range(32768 - 2047, 32768 + 2048)))
+    # One LSB of asymmetry, because an arithmetic shift floors: 1/65536 of a
+    # rate unit, which is 0.0015% of pitch.
+    check("platter is symmetric about mid-grey to within a bit",
+          abs(rate(32768 + 20000, 4095, "platter") + rate(32768 - 20000, 4095, "platter")) <= 1)
+    plat = [rate(u, 2048, "platter") for u in range(65536)]
+    check("platter rate is monotonic in green",
+          all(plat[i] <= plat[i + 1] for i in range(65535)))
+
+    # Brake: ramps monotonically and lands exactly, in both directions.
+    r, seq = 65536, []
+    for _ in range(40000):
+        r = slew_exact(r, 0, 9)
+        seq.append(r)
+        if r == 0:
+            break
+    check("the brake ramps down monotonically and reaches exactly zero",
+          seq[-1] == 0 and all(seq[i] >= seq[i + 1] for i in range(len(seq) - 1)),
+          f"{len(seq)} samples to stop")
+    stop_len = len(seq)
+    r, seq = 0, []
+    for _ in range(40000):
+        r = slew_exact(r, 65536, 11)
+        seq.append(r)
+        if r == 65536:
+            break
+    check("and spins back up monotonically to exactly 1x",
+          seq[-1] == 65536 and all(seq[i] <= seq[i + 1] for i in range(len(seq) - 1)))
+    check("braking is quicker than spinning up, which is what makes it a motor",
+          stop_len < len(seq), f"{stop_len} vs {len(seq)} samples")
+
+    # Falling, a plain shift still reaches zero (it floors, so it always moves
+    # down). Rising is where it gives up — which is the spin-up, and why the
+    # ramp uses slew_exact.
+    stalled = 0
+    for _ in range(100000):
+        step = (65536 - stalled) >> 11
+        if step == 0:
+            break
+        stalled += step
+    check("plain slew would stall short of full speed — hence slew_exact",
+          stalled < 65536, f"stalls at {stalled}, {100*(65536-stalled)/65536:.0f}% slow")
+
+
 def main():
     check_fastmath()
     check_sensors()
@@ -1613,6 +2023,9 @@ def main():
     check_crosstalk()
     check_calibration_kind()
     check_real_maps()
+    check_gesture()
+    check_voice()
+    check_behaviours()
     check_osc()
     check_svf()
     check_fold()

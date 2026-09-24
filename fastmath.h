@@ -24,6 +24,14 @@ constexpr int32_t kSampleRate = 48000;
 constexpr int32_t kCtrlDiv    = 32;                       // control tick every 32 samples
 constexpr int32_t kCtrlRate   = kSampleRate / kCtrlDiv;   // 1500Hz
 
+/// A press shorter than this is a TAP — it cycles a mode's option. Longer is
+/// the mode's record gesture. 171ms sits above the slowest deliberate tap
+/// (~150ms) and below the shortest swipe the LDRs can physically resolve
+/// (~300ms: a CdS cell's own rise and fall is 10-30ms, so a bar passing
+/// faster than that is smeared away before the ADC ever sees it).
+constexpr int kTapTicks  = 256;
+constexpr int kHoldTicks = kCtrlRate;   // 1s
+
 // ---------------------------------------------------------------------------
 // Sine
 // ---------------------------------------------------------------------------
@@ -122,6 +130,40 @@ static inline int32_t pow2_scale(int32_t base, int32_t octQ12)
 }
 
 // ---------------------------------------------------------------------------
+// Noise
+// ---------------------------------------------------------------------------
+
+/// Marsaglia xorshift32. One multiply-free step, ~6 cycles. Never returns 0
+/// once seeded non-zero, which is exactly what the shift chain requires.
+static inline uint32_t __attribute__((always_inline)) xorshift32(uint32_t &s)
+{
+	s ^= s << 13;
+	s ^= s >> 17;
+	s ^= s << 5;
+	return s;
+}
+
+/// Uniform random in Q16 [0, 65536).
+static inline int32_t __attribute__((always_inline)) rand_q16(uint32_t &s)
+{
+	return static_cast<int32_t>(xorshift32(s) >> 16);
+}
+
+/// Bipolar unit noise, the FULL -32768..32767. WorkshopNibbleDrum's version of
+/// this shifts by 17 and so only reaches +/-16384 despite its comment; the
+/// divergence here is deliberate, so do not "fix" it back.
+static inline int32_t __attribute__((always_inline)) rand_bipolar(uint32_t &s)
+{
+	return static_cast<int32_t>(xorshift32(s) >> 16) - 32768;
+}
+
+/// White noise at the DAC's scale, -2048..2047.
+static inline int32_t __attribute__((always_inline)) rand_audio(uint32_t &s)
+{
+	return static_cast<int32_t>(xorshift32(s) >> 20) - 2048;
+}
+
+// ---------------------------------------------------------------------------
 // Logarithm
 // ---------------------------------------------------------------------------
 
@@ -206,6 +248,13 @@ static inline int32_t max3_i32(int32_t a, int32_t b, int32_t c)
 
 // Phase increments at 48kHz for MIDI notes 0..12 (C-1 .. C0), A4 = 440Hz.
 extern const uint32_t kNoteInc[13];
+
+/// Hz -> phase increment per sample at 48kHz. Compile time only: the 64-bit
+/// intermediate is free in a constexpr and would not be in the audio path.
+static constexpr uint32_t HzToInc(int32_t hz)
+{
+	return static_cast<uint32_t>((static_cast<int64_t>(hz) << 32) / kSampleRate);
+}
 
 /// MIDI note in Q8 (note * 256) -> phase increment per sample at 48kHz.
 /// Semitone table plus linear interpolation, then an octave shift.
