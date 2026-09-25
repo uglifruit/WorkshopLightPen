@@ -21,8 +21,11 @@ committed at `UF2/lightpen.uf2`.
 
 `info.yaml` is `draft: false`, `Status: Released`, version 1.1.0. Own repo:
 `uglifruit/WorkshopLightPen`, tagged `v1.1.0`. Submitted to the community
-catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer`
-(PR #421, from branch `add-card-109-lightpen` on the fork).
+catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer` —
+merged there at 1.0.0 (PR #421), with 1.1.0 following as PR #423 from branch
+`update-card-109-lightpen-1.1.0` on the fork. Copy only the files a release
+actually changed into that folder: the fork is checked out with CRLF, so
+re-copying every file makes git see all 41 as modified.
 Design plan of record: `~/.claude/plans/glistening-popping-avalanche.md`.
 
 The bench list further down is no longer a list of blockers — the card has
