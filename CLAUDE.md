@@ -11,15 +11,15 @@ LDRs in the tip under red, green and blue gels. It reads room light or scans
 printed colour (gradient maps, barcode stripes, rainbow strips) and turns it
 into CV and audio across nine modes.
 
-## Current status: v1.1.0, released, flashed and played
+## Current status: v1.1.1, released, flashed and played
 
 Builds clean under `-Wall -Wextra -Wdouble-promotion -Wfloat-conversion` to
 `build/lightpen.uf2`: **5.84% flash, 81.32% RAM** (the RAM is almost entirely
 `gTape`, the 168KB take shared by Modes 4 and 7). The released binary is
 committed at `UF2/lightpen.uf2`.
-`python tools/lpsim.py` passes all 198 checks.
+`python tools/lpsim.py` passes all 202 checks.
 
-`info.yaml` is `draft: false`, `Status: Released`, version 1.1.0. Own repo:
+`info.yaml` is `draft: false`, `Status: Released`, version 1.1.1. Own repo:
 `uglifruit/WorkshopLightPen`, tagged `v1.1.0`. Submitted to the community
 catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer` —
 merged there at 1.0.0 (PR #421), with 1.1.0 following as PR #423 from branch

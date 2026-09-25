@@ -3,7 +3,7 @@ Name: LIGHTPEN
 short-description: An RGB light-sensor wand as a nine-mode controller and sound source
 Language: C++ (ComputerCard)
 Creator: Andy Jenkinson (uglifruit)
-Version: "1.1.0"
+Version: "1.1.1"
 Status: Released
 License: CC-BY-4.0
 repository: https://github.com/uglifruit/WorkshopLightPen
@@ -17,7 +17,7 @@ contact:
 
 uf2:
   - path: UF2/lightpen.uf2
-    name: LIGHTPEN 1.1.0
+    name: LIGHTPEN 1.1.1
 
 tags:
   - controller

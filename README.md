@@ -2,7 +2,7 @@
 
 A program card for the [Music Thing Modular Workshop System Computer](https://github.com/TomWhitwell/Workshop_Computer) that turns an **RGB sensor wand** into a controller and a sound source. The wand is a whiteboard-marker body with three light-dependent resistors (LDRs) in the tip, under red, green and blue lighting gels. Wave it at the room, or scan printed colour with it (gradient maps, barcode stripes, rainbow strips), and the colour becomes CV, gates and audio.
 
-**Version 1.1.0.** All nine modes build and pass the desktop DSP checks in `tools/`. A ready-to-flash binary is in [UF2/lightpen.uf2](UF2/lightpen.uf2) — drag it onto the Computer in bootloader mode.
+**Version 1.1.1.** All nine modes build and pass the desktop DSP checks in `tools/`. A ready-to-flash binary is in [UF2/lightpen.uf2](UF2/lightpen.uf2) — drag it onto the Computer in bootloader mode.
 
 ## Wiring the wand
 
@@ -105,7 +105,7 @@ Coloured stripes still work, read by their lightness. Two practical notes: keep 
 
 **8. Prism Voice.** Mode 5's voice wired to a different set of controls, and a different character: it *sustains* while the gate is high instead of plucking. Red is FM depth from a second oscillator an octave up, green crushes the sample rate from clean down to a sixty-fourth, and blue is the filter cutoff. Same pitch and gate inputs as Mode 5, and the envelope again comes out of CV Out 2. *Main:* waveshape, sine → triangle → square. *Down:* rotate which colour controls what.
 
-**9. Colour Filter.** The one mode that processes something rather than generating it: patch audio into **Audio In 1** and it comes out of both audio outs through a filter the wand holds all three controls of at once — red is **cutoff**, green is **resonance**, and blue is the **filter type**, walking continuously low-pass → band-pass → high-pass. One gesture across a colour map sweeps all three together, which is the thing a filter with three knobs on a panel cannot do.
+**9. Colour Filter.** The one mode that processes something rather than generating it: patch audio into **Audio In 1** and it comes out of both audio outs through a filter the wand holds all three controls of at once — red is **cutoff** (about 230Hz to 7.8kHz), green is **resonance**, and blue is the **filter type**, walking continuously low-pass → band-pass → high-pass. The cutoff doesn't sweep all the way shut: with the wand in the dark the filter is closed but still audible, so a dim room reads as *muffled* rather than as a broken card. One gesture across a colour map sweeps all three together, which is the thing a filter with three knobs on a panel cannot do.
 
 *Main* is drive into the filter, 1x to 8x through a soft clip. It makes the resonance sing, and it puts back the level a narrow band-pass setting takes away; at the bottom of the travel a full-scale peak still loses about 1.4dB to the knee, so treat it as a drive knob at minimum rather than a bypass.
 

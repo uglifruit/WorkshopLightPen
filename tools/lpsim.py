@@ -2108,6 +2108,36 @@ def check_colour_filter():
     check("the gate's hysteresis is wider than a release step at the threshold",
           (40 - 18) > step_at_on, f"band 22 vs step {step_at_on}")
 
+    # The whole Mode 9 chain, end to end, at a level you would actually patch
+    # in. This is the check that was missing when the mode shipped silent: the
+    # arithmetic was all correct, and the mode still made no sound, because a
+    # dark reading asked for a 40Hz low-pass and the wand's resting state in
+    # room light IS dark.
+    def mode9(colour, freq=440, amp=1500, n=9600, res_u=0, type_u=0, main=0):
+        s = Svf()
+        s.set(20480 + ((colour * 11) >> 4), res_u)
+        seg, frac = blend_set(type_u >> 4)
+        d = drive_q12(main)
+        out = []
+        for i in range(n):
+            x = int(amp * math.sin(2 * math.pi * freq * i / 48000))
+            s.process(soft_clip(i32(x * d) >> 12))
+            out.append(clamp(blend_render(s, seg, frac), -2048, 2047))
+        return rms(out[n // 2:])
+
+    ref = 1500 / math.sqrt(2)
+    rest = 20 * math.log10(mode9(0) / ref)
+    check("Mode 9 still passes audible signal with the wand in the dark",
+          rest > -18, f"{rest:.1f} dB at 440Hz, cutoff floor closed")
+    openz = 20 * math.log10(mode9(65535) / ref)
+    check("and is essentially open at full brightness",
+          openz > -1.0, f"{openz:.1f} dB at 440Hz")
+    check("the cutoff sweep is monotonic in brightness",
+          all(mode9(c) < mode9(c + 8192) for c in range(0, 57344, 8192)))
+    # The overflow the obvious remap would have hit at full scale.
+    check("the cutoff remap stays inside int32 at full brightness",
+          i32(65535 * 11) >> 4 == 45055, "11/16 rather than (65536-floor)/65536")
+
     # The mode display: nine distinct patterns, none of them a dark column.
     pats = [mode_leds(m) for m in range(9)]
     check("all nine modes show a distinct LED pattern",
