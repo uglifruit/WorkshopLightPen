@@ -22,8 +22,8 @@ the effects' 40KB `gFx`). The released binary is committed at
 `info.yaml` is `draft: false`, `Status: Released`, version 1.3.0. Own repo:
 `uglifruit/WorkshopLightPen`, tagged `v1.3.0`. Submitted to the community
 catalogue as `releases/109_LightPen` in `TomWhitwell/Workshop_Computer` —
-merged there at 1.0.0 (PR #421), 1.1.0 (#423) and 1.2.0 (#424), with 1.2.1
-open as PR #425. Note 1.1.1 never went up on its own — its Mode 9 fix rode
+merged there at 1.0.0 (PR #421), 1.1.0 (#423), 1.2.0 (#424) and 1.2.1 (#425),
+with 1.3.0 open as PR #426. Note 1.1.1 never went up on its own — its Mode 9 fix rode
 along in 1.2.0, so the catalogue skipped straight from 1.1.0. Copy only the files a release
 actually changed into that folder: the fork is checked out with CRLF, so
 re-copying every file makes git see all 41 as modified.
